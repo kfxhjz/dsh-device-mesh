@@ -11,6 +11,7 @@
  * creating a second React root). Data comes from the shared polling store.
  */
 import { getMeshSnapshot, meshApi, refreshMeshState, subscribeMesh } from './api.js'
+import { remoteRefreshDue } from './remote-status.js'
 import { hideRemotePane, remotePaneDevice, remotePaneSession } from './remote-pane.js'
 import { getSelectedHost, requestAddHost, setSelectedHost, subscribeHost } from './host-store.js'
 import type { MeshDeviceView, WorkspaceSummary } from '../shared/protocol.js'
@@ -109,6 +110,8 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
   let disposed = false
   let remoteHost: string | null = null
   let remoteRequestedFor: string | null = null
+  let lastRemoteRefreshAt = 0
+  let remoteRefreshing = false
   let remoteLoading = false
   let remoteError: string | null = null
   let remoteSignature = ''
@@ -225,6 +228,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
   const requestRemote = (deviceId: string, force = false): void => {
     if (!force && remoteRequestedFor === deviceId) return
     remoteRequestedFor = deviceId
+    lastRemoteRefreshAt = Date.now()
     remoteLoading = true
     remoteError = null
     renderAll()
@@ -237,6 +241,28 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
         remoteLoading = false
         renderAll()
       })
+  }
+
+  /**
+   * Keep the selected remote's session status fresh.
+   *
+   * The Host only refreshes `state.devices[].remoteWorkspaces` when asked, so
+   * without this the mirror would show the first listing forever and running /
+   * awaiting session state would never change. Throttled by
+   * {@link remoteRefreshDue}; failures are silent and retried next window.
+   */
+  const refreshRemoteStatus = (device: MeshDeviceView): void => {
+    if (!remoteRefreshDue({
+      now: Date.now(),
+      lastRefreshAt: lastRemoteRefreshAt,
+      refreshing: remoteRefreshing,
+      status: device.status,
+    })) return
+    lastRemoteRefreshAt = Date.now()
+    remoteRefreshing = true
+    void meshApi.refreshWorkspaces(device.deviceId)
+      .catch(() => undefined)
+      .finally(() => { remoteRefreshing = false })
   }
 
   const renderBar = (hosts: readonly HostView[], selected: string): void => {
@@ -382,6 +408,28 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     }
   }
 
+  /**
+   * Status indicator for a remote session row: a spinner while the session is
+   * running (matching the native shell), otherwise a small state dot.
+   */
+  const sessionIndicator = (session: WorkspaceSummary['sessions'][number]): HTMLElement => {
+    if (session.running) {
+      const spinner = span('dm-spinner dm-remote-session-spinner', '')
+      spinner.setAttribute('role', 'img')
+      spinner.title = options.t('remote.running')
+      spinner.setAttribute('aria-label', options.t('remote.running'))
+      return spinner
+    }
+    const dot = span('dm-remote-session-dot', '')
+    if (session.awaitingUser) {
+      dot.classList.add('dm-remote-session-dot-awaiting')
+      dot.title = options.t('status.connecting')
+    } else if (session.unread) {
+      dot.classList.add('dm-remote-session-dot-unread')
+    }
+    return dot
+  }
+
   const sessionNode = (
     style: NativeRowStyle,
     device: MeshDeviceView,
@@ -416,16 +464,6 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
         options.openPortal(device.deviceId, session.id)
       }
     })
-    const dot = span('dm-remote-session-dot', '')
-    if (session.awaitingUser) {
-      dot.classList.add('dm-remote-session-dot-awaiting')
-      dot.title = options.t('status.connecting')
-    } else if (session.running) {
-      dot.classList.add('dm-remote-session-dot-running')
-      dot.title = options.t('status.online')
-    } else if (session.unread) {
-      dot.classList.add('dm-remote-session-dot-unread')
-    }
     const time = span('dm-remote-session-time', relativeTime(session.updatedAt))
     time.title = session.updatedAt
     const title = row.querySelector<HTMLElement>(`:scope > .${CSS.escape(`${style.prefix}title`)}`)
@@ -433,7 +471,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     title.textContent = session.title.length === 0 ? session.id : session.title
     const slot = row.querySelector<HTMLElement>(`:scope > .${CSS.escape(`${style.prefix}slot`)}`)
       ?? span(`${style.prefix}slot`, '')
-    slot.replaceChildren(dot)
+    slot.replaceChildren(sessionIndicator(session))
     const resting = row.querySelector<HTMLElement>(`:scope > .${CSS.escape(`${style.prefix}rowResting`)}`)
       ?? span(`${style.prefix}rowResting`, '')
     resting.replaceChildren(time)
@@ -467,7 +505,10 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
         row.type = 'button'
         row.className = 'dm-remote-session'
         row.setAttribute('data-dm-remote-session', session.id)
-        row.append(span('dm-remote-session-title', session.title.length === 0 ? session.id : session.title))
+        row.append(
+          sessionIndicator(session),
+          span('dm-remote-session-title', session.title.length === 0 ? session.id : session.title),
+        )
         row.addEventListener('click', () => { options.openPortal(device.deviceId, session.id) })
         fallback.append(row)
       }
@@ -665,6 +706,8 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     const previous = remoteHost
     remoteHost = device === undefined ? null : device.deviceId
     if (remoteHost !== previous) {
+      lastRemoteRefreshAt = 0
+      remoteRefreshing = false
       remoteError = null
       remoteActiveSession = null
       if (remoteHost === null) {
@@ -688,6 +731,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     }
     syncNativeMode()
     renderRemote(device)
+    if (device !== undefined) refreshRemoteStatus(device)
     if (menuOpen && menu !== null) {
       const toggle = bar?.querySelector<HTMLElement>(`[${TOGGLE_ATTR}]`)
       if (toggle !== undefined && toggle !== null) positionMenu(toggle)

@@ -29,6 +29,22 @@ const STATE = {
     revoked: false,
     scope: { kind: 'control', workspaces: 'all', expiresAt: null },
     status: 'online',
+    remoteWorkspaces: {
+      updatedAt: '2026-11-12T00:00:00.000Z',
+      workspaces: [{
+        id: 'ws-remote',
+        title: 'Remote Demo Workspace',
+        path: '/tmp/remote-demo',
+        sessions: [{
+          id: 'sess-remote',
+          title: 'Running task',
+          updatedAt: '2026-11-12T00:00:00.000Z',
+          running: true,
+          awaitingUser: false,
+          unread: false,
+        }],
+      }],
+    },
   }],
   pendingPairings: [],
   portals: [],
@@ -57,12 +73,20 @@ function setupDom(): void {
   setGlobal('HTMLInputElement', window.HTMLInputElement)
   setGlobal('HTMLDialogElement', window.HTMLDialogElement)
   setGlobal('Node', window.Node)
-  setGlobal('fetch', async () => ({
-    ok: true,
-    status: 200,
-    statusText: 'OK',
-    json: async () => ({ ok: true, value: STATE }),
-  }))
+  setGlobal('fetch', async (_input: unknown, init?: { body?: unknown }) => {
+    const request = typeof init?.body === 'string'
+      ? JSON.parse(init.body) as { endpoint?: string }
+      : {}
+    const value = request.endpoint === 'workspaces.refresh'
+      ? STATE.devices[0].remoteWorkspaces
+      : STATE
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ ok: true, value }),
+    }
+  })
   window.document.body.innerHTML = '<div class="native-root"><div class="sectionHeader">Workspaces</div></div>'
   setSelectedHost('local')
 }
@@ -118,4 +142,29 @@ test('mounts the host bar above the native header and drives the switcher menu',
 
   assert.equal(document.querySelector('[data-device-mesh-host-bar]'), null)
   assert.equal(document.querySelector('[data-device-mesh-remote-workspaces]'), null)
+})
+
+test('renders the remote mirror with a spinner for a running remote session', async () => {
+  setupDom()
+  setSelectedHost('dm_remote')
+  await refreshMeshState()
+
+  const teardown = mountSidebarHost({
+    t: (key: string) => key,
+    openDevices: () => {},
+    openPortal: () => {},
+    connectDevice: () => {},
+  })
+  try {
+    const remoteRoot = document.querySelector('[data-device-mesh-remote-workspaces]')
+    assert.ok(remoteRoot)
+    assert.equal((remoteRoot as HTMLElement).hidden, false)
+    const session = remoteRoot.querySelector('[data-dm-remote-session="sess-remote"]')
+    assert.ok(session)
+    const spinner = session.querySelector('.dm-spinner.dm-remote-session-spinner')
+    assert.ok(spinner, 'running session shows a spinner')
+    assert.equal(spinner.getAttribute('title'), 'remote.running')
+  } finally {
+    teardown()
+  }
 })

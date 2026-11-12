@@ -899,6 +899,15 @@ textarea.dm-input { resize: vertical; min-height: 72px; }
 
 @keyframes dm-spin { to { transform: rotate(360deg); } }
 
+/* Running remote session: a compact version of the panel spinner. */
+.dm-remote-session-spinner {
+  width: 12px;
+  height: 12px;
+  border-width: 2px;
+  border-color: var(--dsw-alias-state-success-primary);
+  border-top-color: transparent;
+}
+
 @media (max-width: 720px) {
   .dm-root { padding: 16px 14px 40px; gap: 14px; }
   .dm-header { flex-direction: column; }
