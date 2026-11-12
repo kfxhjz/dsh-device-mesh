@@ -15,6 +15,7 @@ npm ci
 npm run build
 npm run typecheck
 npm test
+npm run test:coverage               # source coverage thresholds
 npm run test:e2e       # needs a dsh CLI; optional relay binary; Chrome for the browser test
 npm pack --dry-run     # must list 11 files (lib/, client.js, cordis.patch.yml, locale, icon, READMEs, LICENSE)
 ```

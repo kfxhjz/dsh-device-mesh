@@ -418,6 +418,7 @@ npm run build:client   # client bundle only (UI work)
 npm run watch          # rebuild on change
 npm run typecheck      # tsc --noEmit
 npm test               # core + transport + host + client suites
+npm run test:coverage  # the same suites with source coverage thresholds
 npm run test:e2e       # two real `dsh web` instances (see below)
 ```
 

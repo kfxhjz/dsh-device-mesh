@@ -312,7 +312,8 @@ Android / iOS / 鸿蒙的原生外壳是另外的工作。深链是尽力而为�
 | Core | `npm run test:core` | Noise NK/NKpsk0 测试向量、密码学、通道认证（含 paired 与 pair-token 不变量）、RPC/流多路复用、portal WebSocket 关闭记账、篡改/重放失败。 |
 | Transport | `npm run test:transport` | 直连 listener/client、Origin 拒绝、上限、针对 mock 与真实 relay 的 relay v1/v2。 |
 | Host | `npm run test:host` | Store 原子性/恢复与身份密钥对校验、配对签名/TTL/重放、broker（含 relay 票据开关与待批准请求取消）、工作区映射与 64 KiB 列表预算、portal controller/daemon、本地 Web API。 |
-| Client | `npm test` | 静态检查 bundle 是否注册了预期 slot、是否没有 host-only import。 |
+| Client | `npm test` | 覆盖 client store、normalizers、i18n 字典、QR 与 deep-link helper 的直接单测，sidebar host bar/switcher 的 happy-dom 测试，以及 bundle 是否注册预期 slot、是否没有 host-only import 的静态检查。 |
+| 覆盖率 | `npm run test:coverage` | 同一套测试，用 `--test-coverage-include-all` 统计 `src/` 并强制行/分支/函数覆盖率门槛。 |
 | 端到端 | `npm run test:e2e` | 两个隔离的 `dsh web` 实例：插件加载与本地 API；直连配对、SAS 批准、工作区列表与 portal；仅 relay 的配对与 portal；portal WebSocket 文本帧。 |
 | 浏览器 UI | `npm run test:ui`（包含在 `test:e2e` 中） | 无头 Chrome 打开 portal 并启动被控端真实 DSH UI，包括其要求 text 帧的 Remote stream WebSocket；无 Chrome 时 skip。 |
 
@@ -323,10 +324,12 @@ Android / iOS / 鸿蒙的原生外壳是另外的工作。深链是尽力而为�
 打 tag 前运行 `npm run release:check`：执行构建、typecheck、单元与 E2E、`npm pack --dry-run`，
 对应 [`RELEASE.zh.md`](../../RELEASE.zh.md) 的自动化门槛。
 
-CI 在 Ubuntu 与 macOS 上、Node.js 24 和 26 两个版本运行 `npm ci`、`npm run build`、
-`npm run typecheck` 和 `npm test`，然后在 Ubuntu 上以全局安装的 DSH `0.2.2-rc.2` 和
-`DSH_CLI=dsh` 运行 `npm run test:e2e`。CI 不附带 paseo-relay 二进制，因此 relay E2E 用例在那里会被跳过；
-在发布涉及 relay 行为变更的版本前，请在本地运行它。
+CI 在 Ubuntu、macOS 与 Windows 上以 Node.js 24 和 26 运行 `npm ci`、`npm run build`、
+`npm run typecheck`、`npm run lint`、`npm test`，并在 Ubuntu/Node 24 上运行
+`npm run test:coverage`；随后在 Ubuntu 上以全局安装的 DSH `0.2.2-rc.2` 和 `DSH_CLI=dsh`
+运行 `npm run test:e2e`。另有独立的 `e2e-relay` job 会构建固定版本的 paseo-relay `v0.1.2`
+二进制，并针对它运行 `test/transport/relay-e2e.test.ts` 与 `test/e2e/relay.test.ts`。
+夜间定时任务会完整重跑一次 CI。
 
 发布工作流（`.github/workflows/release.yml`）通过 `npm run release:check` 运行同一套门槛，校验 `v*`
 tag 与 `package.json` 版本一致，生成 `SHA256SUMS`，并用 `scripts/release-notes.mjs` 从 `CHANGELOG.md`

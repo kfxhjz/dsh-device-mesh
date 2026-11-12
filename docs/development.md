@@ -327,7 +327,8 @@ portal, DSH wiring or the client boot graph.
 | Core | `npm run test:core` | Noise NK/NKpsk0 vectors, crypto, channel authentication (including the paired-vs-pair-token invariant), RPC/stream multiplexing, portal WebSocket close accounting, tamper/replay failures. |
 | Transport | `npm run test:transport` | Direct listener/client, Origin rejection, limits, relay v1/v2 against a mock and a real relay. |
 | Host | `npm run test:host` | Store atomicity/recovery and identity key-pair validation, pairing signatures/TTL/replay, broker (including relay-ticket gating and pending-request cancellation), workspace mapping plus the 64 KiB listing budget, portal controller/daemon, local Web API. |
-| Client | `npm test` | Static checks that the bundle registers the expected slots and has no host-only imports. |
+| Client | `npm test` | Direct unit tests for the client store, normalizers, i18n dictionaries, QR and deep-link helpers, a happy-dom test for the sidebar host bar/switcher, plus static checks that the bundle registers the expected slots and has no host-only imports. |
+| Coverage | `npm run test:coverage` | The same suites with `--test-coverage-include-all` over `src/`, enforcing line/branch/function thresholds. |
 | End-to-end | `npm run test:e2e` | Two isolated `dsh web` instances: plugin load and local API; direct pairing, SAS approval, workspace list and portal; relay-only pairing and portal; portal WebSocket text frames. |
 | Browser UI | `npm run test:ui` (part of `test:e2e`) | Headless Chrome opens the portal and boots the daemon's real DSH UI, including its text-frame Remote stream WebSocket; skips without Chrome. |
 
@@ -338,10 +339,11 @@ plain checkout.
 Use `npm run release:check` before tagging: it runs the build, typecheck, unit and E2E suites plus `npm pack --dry-run`,
 matching the automated half of [`RELEASE.md`](../RELEASE.md).
 
-CI runs `npm ci`, `npm run build`, `npm run typecheck` and `npm test` on Ubuntu and macOS for Node.js 24 and
-26, then `npm run test:e2e` on Ubuntu with `DSH_CLI=dsh` and DSH `0.2.2-rc.2` installed globally. CI does not
-ship a paseo-relay binary, so the relay E2E case is skipped there; run it locally before a release that changes
-relay behavior.
+CI runs `npm ci`, `npm run build`, `npm run typecheck`, `npm run lint`, `npm test` and (on Ubuntu/Node 24)
+`npm run test:coverage` across Ubuntu, macOS and Windows for Node.js 24 and 26, then `npm run test:e2e` on
+Ubuntu with `DSH_CLI=dsh` and DSH `0.2.2-rc.2` installed globally. A separate `e2e-relay` job builds the pinned
+paseo-relay `v0.1.2` binary and runs `test/transport/relay-e2e.test.ts` plus `test/e2e/relay.test.ts` against it.
+A nightly schedule repeats the full CI run.
 
 The release workflow (`.github/workflows/release.yml`) runs the same gate through `npm run release:check`,
 verifies that the `v*` tag matches `package.json`, writes `SHA256SUMS`, and publishes the tarball with release

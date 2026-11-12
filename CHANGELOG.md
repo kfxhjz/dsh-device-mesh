@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Direct unit tests for the client half: API normalizers, the host-selection
+  store, both locale dictionaries, QR encoding, deep-link handling and a
+  happy-dom test for the sidebar host bar/switcher. Measured with
+  `--test-coverage-include-all`, overall source line coverage rises from roughly
+  69% to roughly 84%, and the client half is no longer covered only by bundle
+  static assertions.
+- `npm run test:coverage` enforces source line/branch/function thresholds
+  (82/73/78) and is part of `npm run release:check`.
+- Deterministic protocol fuzz tests for Noise handshake parsing, channel/session
+  frame parsing and WebSocket-message envelopes, plus a short soak suite gated by
+  `DSH_MESH_SOAK=1` (skipped in normal runs).
+
 ### Changed
 
 - Upgraded the toolchain and dependencies to their latest releases: TypeScript 7
@@ -20,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an npm `overrides` entry pinning `minimatch` to the patched 11.x line, so
   the development-only ESLint chain loaded by the Oxlint `@stylistic` plugin no
   longer reports the globbing denial-of-service advisory.
+- CI now covers Ubuntu, macOS and Windows (Node.js 24/26; Windows runs Node 24),
+  adds the coverage gate, a dedicated real paseo-relay E2E job that builds the
+  pinned `v0.1.2` binary, and a nightly scheduled run.
+- Repository hygiene: `.gitattributes` (LF line endings) and `.nvmrc` (Node 24)
+  added; the changelog now links each release section.
 
 ## 0.1.0 - 2026-11-12
 
@@ -308,3 +327,6 @@ First MVP release, verified against DSH `0.2.2-rc.1`.
 - End-to-end suite with real `dsh web` instances: plugin load and client bundle
   in the boot graph, two-device direct pairing through SAS approval and portal,
   and a relay-only pairing/portal run with direct listeners disabled.
+
+[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.0

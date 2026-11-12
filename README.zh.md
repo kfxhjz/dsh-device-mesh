@@ -265,6 +265,7 @@ npm run build:client   # 只构建 client（改 UI 时）
 npm run watch          # 变更时重建
 npm run typecheck      # tsc --noEmit
 npm test               # core + transport + host + client
+npm run test:coverage  # 同一套测试 + 源码覆盖率门槛
 npm run test:e2e       # 两个真实 `dsh web` 实例（见下）
 ```
 

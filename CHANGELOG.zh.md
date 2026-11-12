@@ -9,6 +9,17 @@
 
 ## Unreleased
 
+### 新增（Added）
+
+- client 半边的直接单测：API normalizers、host 选择 store、中英文词典、QR 编码、
+  deep-link 处理，以及 sidebar host bar/switcher 的 happy-dom 测试。按
+  `--test-coverage-include-all` 统计，源码整体行覆盖率从约 69% 提升到约 84%，
+  client 半边不再只靠 bundle 静态断言覆盖。
+- `npm run test:coverage` 强制源码行/分支/函数覆盖率门槛（82/73/78），并已纳入
+  `npm run release:check`。
+- 针对 Noise 握手解析、channel/session 帧解析和 WebSocket 消息 envelope 的确定性
+  fuzz 测试，以及由 `DSH_MESH_SOAK=1` 控制的短时 soak 套件（普通运行会 skip）。
+
 ### 变更（Changed）
 
 - 工具链与依赖升级到最新版本：TypeScript 7（原生编译器）、`@types/node` 26、
@@ -19,6 +30,10 @@
   `softprops/action-gh-release@v3`。
 - 新增 npm `overrides`，把 `minimatch` 固定到已修复的 11.x 分支，Oxlint
   `@stylistic` 插件加载的开发期 ESLint 依赖链不再报告 glob 拒绝服务公告。
+- CI 覆盖 Ubuntu、macOS 与 Windows（Node.js 24/26；Windows 跑 Node 24），新增覆盖率
+  门禁、独立的真实 paseo-relay E2E job（构建固定 `v0.1.2` 二进制），以及夜间定时运行。
+- 仓库卫生：新增 `.gitattributes`（LF 行尾）与 `.nvmrc`（Node 24）；CHANGELOG 增加
+  各版本的链接。
 
 ## 0.1.0 - 2026-11-12
 
@@ -208,3 +223,6 @@
 - Core 套件覆盖 Noise NK/NKpsk0 官方测试向量、握手与认证失败路径、RPC/流多路复用、存储损坏恢复、配对签名/过期/重放规则，以及 portal 认证与转发。
 - Transport 套件覆盖直连往返、限制和 Origin 检查，以及针对真实 relay 二进制和 mock relay 的 paseo-relay v1/v2 行为。
 - 端到端套件使用真实 `dsh web` 实例：插件加载与 client bundle 出现在启动图中、两台设备通过 SAS 批准和 portal 完成直连配对，以及在关闭直连监听的情况下完成仅中继的配对/portal 运行。
+
+[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.0

@@ -35,6 +35,7 @@ npm test
 | `npm run watch` | 变更时自动重建。 |
 | `npm run typecheck` | `tsc -p tsconfig.json --noEmit`。 |
 | `npm test` | core、transport、host 和 client 测试套件。 |
+| `npm run test:coverage` | 同一套测试，外加源码行/分支/函数覆盖率门槛。 |
 | `npm run test:core` / `test:transport` / `test:host` | 每次只跑一个套件。 |
 | `npm run lint` | 使用与 DSH 上游同族的 Oxlint 检查 `src`、`test`、`scripts`，包含 DSH 的 `@stylistic` 格式规则以及 import 卫生（顶层 `import type`、不重复导入同一模块）。 |
 | `npm run test:e2e` | 启动真实的 `dsh web` 实例；见下文。 |

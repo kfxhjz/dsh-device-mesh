@@ -14,6 +14,7 @@ npm ci
 npm run build
 npm run typecheck
 npm test
+npm run test:coverage               # 源码覆盖率门槛
 npm run test:e2e       # 需要 dsh CLI；relay 二进制与 Chrome 可选
 npm pack --dry-run     # 必须列出 11 个文件（lib/、client.js、cordis.patch.yml、locale、icon、README、LICENSE）
 ```
