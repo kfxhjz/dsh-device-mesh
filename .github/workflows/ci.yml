@@ -49,8 +49,8 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
-      - name: Coverage gate
-        if: matrix.os == 'ubuntu-latest' && matrix.node == 24
+      - name: Coverage gate (full source, Node 26)
+        if: matrix.os == 'ubuntu-latest' && matrix.node == 26
         run: npm run test:coverage
 
   e2e:

@@ -14,7 +14,7 @@ license your contributions under the repository's [MIT license](LICENSE).
 
 | Requirement | Notes |
 |---|---|
-| Node.js `>=24.9.0` | The host bundle targets `node24`. |
+| Node.js `>=24.9.0` | The host bundle targets `node24`; Node 26 is recommended for the full source-coverage gate (`.nvmrc`). |
 | npm | The repository uses `package-lock.json`; `npm ci` is fine for clean installs. |
 | pnpm | `dsh plugin add`/`remove` forwards to pnpm, so the DSH CLI needs pnpm on `PATH`; CI uses pnpm 11. |
 | DSH `0.2.2-rc.2` | The plugin is built and tested against this baseline (`engines.dsh` is `>=0.2.2-rc.1 <0.3.0`). |

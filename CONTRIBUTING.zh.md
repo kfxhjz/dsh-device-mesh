@@ -10,7 +10,7 @@
 
 | 要求 | 说明 |
 |---|---|
-| Node.js `>=24.9.0` | host bundle 以 `node24` 为目标。 |
+| Node.js `>=24.9.0` | host bundle 以 `node24` 为目标；完整源码覆盖率门槛建议使用 Node 26（`.nvmrc`）。 |
 | npm | 仓库使用 `package-lock.json`；干净安装用 `npm ci` 即可。 |
 | pnpm | `dsh plugin add`/`remove` 会转发给 pnpm，因此 DSH CLI 需要 `PATH` 上有 pnpm；CI 使用 pnpm 11。 |
 | DSH `0.2.2-rc.2` | 插件基于该基线构建和测试（`engines.dsh` 为 `>=0.2.2-rc.1 <0.3.0`）。 |
