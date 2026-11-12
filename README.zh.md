@@ -1,10 +1,15 @@
 # DSH 设备网格
 
+[![CI](https://github.com/kfxhjz/dsh-device-mesh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kfxhjz/dsh-device-mesh/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/kfxhjz/dsh-device-mesh)](https://github.com/kfxhjz/dsh-device-mesh/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kfxhjz/dsh-device-mesh/blob/main/LICENSE)
+[![DSH](https://img.shields.io/badge/DSH-0.2.2--rc.2-4D6BFE)](https://github.com/kfxhjz/dsh-device-mesh#requirements)
+
 [English](https://github.com/kfxhjz/dsh-device-mesh/blob/main/README.md) | 简体中文
 
 把多台 **DeepSeek Harness (DSH)** 设备配成一个设备网格。配对一次之后，任意一台已配对设备都可以打开另一台设备的完整 DSH Web UI——对话、审批、终端、文件和设置——就像坐在那台机器前一样。
 
-> 状态：MVP（`v0.0.1`），面向 DSH `0.2.2-rc.1`。
+> 状态：开发者预览（`v0.1.0`），面向 DSH `0.2.2-rc.2`。
 > 架构与安全模型：[docs/zh/DESIGN.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/zh/DESIGN.zh.md)。
 > 线上协议：[docs/zh/PROTOCOL.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/zh/PROTOCOL.zh.md)。
 
@@ -16,6 +21,16 @@ DSH 设备网格是一个第三方 DSH 插件（host 插件 + Web client 插件�
 - **主控端（controller）**是你正在使用的设备。它与被控端配对、列出对方的工作区，并通过一个名为 **portal（传送门）** 的本机反向代理打开对方的 DSH Web UI。
 
 角色是按连接区分的，不是按机器固定的：每个安装都包含两半，所以每台设备既能控制别人，也能被控制。协议与操作系统无关。
+
+## 界面截图
+
+侧边栏的 host 切换器会列出本机与已配对远端；选择远端后，工作区区域会镜像对方的 workspaces 与 sessions（带 **Remote** 标记），本机目录树保持不变，任意一行都可以通过 portal 打开完整的远端 UI。
+
+![Host 切换器与远端工作区镜像](https://raw.githubusercontent.com/kfxhjz/dsh-device-mesh/main/docs/assets/sidebar-remote-hosts.png)
+
+![通过本机 portal 打开的、对端设备的 DSH Web UI](https://raw.githubusercontent.com/kfxhjz/dsh-device-mesh/main/docs/assets/remote-portal-ui.png)
+
+两张截图来自隔离的双实例 E2E 运行，不是真实设备 profile。
 
 ## 功能
 
@@ -78,7 +93,7 @@ Device A (daemon)                              Device B (controller)
 
 ## 环境要求
 
-- **DSH** `>=0.2.2-rc.1 <0.3.0`（在 `package.json` 的 `engines.dsh` 中声明）。不兼容的 DSH 版本会被拒绝，而不是静默降级。
+- **DSH** `>=0.2.2-rc.1 <0.3.0`（在 `package.json` 的 `engines.dsh` 中声明）；CI 与发布门禁固定在 `0.2.2-rc.2`。不兼容的 DSH 版本会被拒绝，而不是静默降级。
 - **Node.js** `>=24.9.0`，用于构建插件和运行服务端安装。桌面版自带运行时。
 - **npm**（构建只使用 `package.json` 中声明的依赖）。
 - **pnpm**，用于 `dsh plugin add`/`remove`：DSH CLI 会把这两个命令转发给 pnpm，所以
@@ -89,7 +104,14 @@ Device A (daemon)                              Device B (controller)
 
 ## 安装
 
-插件是标准的 DSH 第三方 bundle：一个 host 插件加一个 Web client 插件。先构建一次，再把构建出的目录（或 `.tgz`）装进 DSH profile，然后重启 DSH。
+插件是标准的 DSH 第三方 bundle：一个 host 插件加一个 Web client 插件。多数用户可以直接安装
+[最新 release](https://github.com/kfxhjz/dsh-device-mesh/releases/latest) 里的预构建 `.tgz`，无需自己构建：
+
+```sh
+dsh plugin --profile <profile> add ./dsh-device-mesh-<version>.tgz
+```
+
+下面的步骤面向贡献者，以及没有发布产物的平台，从源码构建。
 
 ### 1. 从源码构建
 
@@ -141,7 +163,7 @@ dsh web --no-open
 
 ```sh
 npm pack
-dsh plugin --profile desktop add ./dsh-device-mesh-0.0.1.tgz
+dsh plugin --profile desktop add ./dsh-device-mesh-0.1.0.tgz
 ```
 
 同一个 `add` 命令也接受本地目录、`.tgz`、npm 包名或 `link:` 规格。相对路径以运行命令时的目录为基准。
@@ -229,6 +251,7 @@ docker run -d --name paseo-relay --restart unless-stopped --stop-timeout 30 \
 - **最小权限与撤销。** 当前版本保留但不接受 `view` 授权（审批时直接拒绝）；portal 需要不受限的 `control` 授权；撤销会立即断开会话与 portal，授权过期会在 30 秒清扫周期内生效。
 - **撤销与审计。** 可以在远程设备面板撤销任意已配对设备；撤销会立即断开会话并拒绝后续握手。配对、连接、撤销和 portal 打开事件都会审计，但不记录消息内容、令牌或 cookie。
 - **受信任的 host 代码。** DSH host 插件以受信任的 Node.js 代码运行在 DSH 进程内。安装本插件等同于运行它的代码；只安装你信任的构建。
+- **尚未独立审计。** 目前没有经过第三方安全审计；本版本基于内部评审，配对、Noise、portal 认证与撤销路径都有回归测试。请只部署在你控制的设备上，按加固清单操作，并通过私密渠道报告可疑问题。
 
 威胁模型、密钥处理和部署加固清单见 [SECURITY.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/SECURITY.zh.md)。架构取舍见 [docs/zh/DESIGN.zh.md §5](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/zh/DESIGN.zh.md)。
 
@@ -272,7 +295,7 @@ test/         单元、传输与端到端测试
 - **原生 RPC 控制是第二阶段。** 在本地 UI 内直接驱动远端会话（列会话、发 prompt、处理审批、attach 终端）已有设计但尚未实现。见 [docs/zh/development.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/zh/development.zh.md) 与 [ADR 0001](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/zh/adr/0001-remote-control-in-dsh.zh.md)。
 - **未验证的 UI 路径。** 桌面 Electron 中「新窗口打开 portal / 右侧栏打开」需要安装后人工目视确认。真机摄像头扫码尚未测试；目前没有移动端（Android / iOS / 鸿蒙）构建。
 - **不做文件、剪贴板或屏幕串流。** 不做多跳/级联，也不与 Paseo 原生协议互通——只复用 paseo-relay 的路由。
-- **版本耦合。** DSH 的 slot 与服务契约可能随版本变化。插件以 `0.2.2-rc.1` 为基线测试，遇到不兼容的协议版本会失败关闭。
+- **版本耦合。** DSH 的 slot 与服务契约可能随版本变化。插件以 `0.2.2-rc.2` 为基线测试，遇到不兼容的协议版本会失败关闭。
 - **Windows** 不在测试矩阵内。
 
 ## 文档
@@ -287,6 +310,8 @@ test/         单元、传输与端到端测试
 | [docs/README.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/README.zh.md) | 文档索引 |
 | [CONTRIBUTING.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/CONTRIBUTING.zh.md) | 开发环境、打包契约、PR 规范 |
 | [SECURITY.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/SECURITY.zh.md) | 漏洞报告与部署加固 |
+| [MAINTAINERS.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/MAINTAINERS.md) | 维护者、review/发布职责与安全分诊渠道 |
+| [CODE_OF_CONDUCT.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/CODE_OF_CONDUCT.zh.md) · [English](https://github.com/kfxhjz/dsh-device-mesh/blob/main/CODE_OF_CONDUCT.md) | 社区行为准则 |
 | [CHANGELOG.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/CHANGELOG.zh.md) | 发布历史 |
 | [RELEASE.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/RELEASE.zh.md) | 发布门槛：自动化检查、人工矩阵、已知限制 |
 

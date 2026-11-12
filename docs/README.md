@@ -38,6 +38,8 @@ rather than rewriting an accepted one.
 | [README.md](../README.md) · [README.zh.md](../README.zh.md) | User-facing overview, installation, pairing and relay setup. |
 | [CONTRIBUTING.md](../CONTRIBUTING.md) · [中文](../CONTRIBUTING.zh.md) | Development environment, commands, bundle contract, pull-request rules and test requirements. |
 | [SECURITY.md](../SECURITY.md) · [中文](../SECURITY.zh.md) | Supported versions, private vulnerability reporting, threat model and deployment hardening. |
+| [MAINTAINERS.md](../MAINTAINERS.md) | Current maintainers, review/release duties, security triage route and bus-factor notes. |
+| [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) · [中文](../CODE_OF_CONDUCT.zh.md) | Community behaviour expectations and enforcement. |
 | [CHANGELOG.md](../CHANGELOG.md) · [中文](../CHANGELOG.zh.md) | Release history in Keep a Changelog format. |
 | [RELEASE.md](../RELEASE.md) · [中文](../RELEASE.zh.md) | Release gate: automated checks, manual verification matrix and known limitations. |
 | [LICENSE](../LICENSE) | MIT license. |

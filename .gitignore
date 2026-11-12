@@ -11,3 +11,6 @@ client.js
 .build/
 .test/
 .pnpm-store/
+
+release-body.md
+SHA256SUMS

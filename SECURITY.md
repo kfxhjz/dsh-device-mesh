@@ -4,17 +4,29 @@
 
 ## Supported versions
 
-DSH Device Mesh is pre-1.0. Security fixes are made on the latest `0.0.x`
-release; older `0.0.x` builds and unreleased commits are not supported.
+DSH Device Mesh is pre-1.0. Security fixes are made on the latest `0.1.x`
+release; older `0.1.x` builds and unreleased commits are not supported.
 
 | Version | Supported |
 |---|---|
-| `0.0.x` (latest release) | ✅ |
-| Older `0.0.x` releases | ❌ |
+| `0.1.x` (latest release) | ✅ |
+| Older `0.1.x` releases | ❌ |
 | Unreleased branches / forks | ❌ |
 
 The plugin targets DSH `>=0.2.2-rc.1 <0.3.0`. A DSH version outside that range is
 rejected at load time rather than run with an unknown security contract.
+
+## Security review status
+
+This project has **not** undergone an independent third-party security audit.
+The current release reflects an internal threat-model review: pairing, Noise,
+portal authentication and revocation paths carry regression tests, and
+security-relevant fixes are listed under **Security** in
+[CHANGELOG.md](CHANGELOG.md). Remote control is owner-level access, so deploy it
+with the hardening checklist below and report suspected issues privately.
+
+Maintainers and the security triage route are listed in
+[MAINTAINERS.md](MAINTAINERS.md).
 
 ## Reporting a vulnerability
 
@@ -25,7 +37,9 @@ Use GitHub Security Advisories:
 <https://github.com/kfxhjz/dsh-device-mesh/security/advisories/new>
 
 The advisory form is private until a fix is ready. If GitHub Advisories are
-unavailable, contact a maintainer privately through the repository.
+unavailable, contact a maintainer privately using the route listed in
+[MAINTAINERS.md](MAINTAINERS.md). Do not include a live pairing link, key or
+cookie in the first message.
 
 Please include:
 

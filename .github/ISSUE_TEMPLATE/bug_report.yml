@@ -1,0 +1,102 @@
+name: Bug report
+description: Report a reproducible problem with pairing, remote control, the plugin build or the packaged tarball
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Before you continue:
+
+        - **Security vulnerabilities must not be reported here.** Use
+          [GitHub Security Advisories](https://github.com/kfxhjz/dsh-device-mesh/security/advisories/new)
+          instead; the advisory stays private until a fix is ready.
+        - **Redact first.** Remove pairing links, QR codes, `identity.json`
+          contents, private keys, DSH session cookies, portal capability URLs,
+          relay `serverId` values, device names, LAN addresses and personal
+          paths from the description, logs and screenshots.
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      description: The `dsh-device-mesh` version you are running.
+      placeholder: "e.g. 0.1.0 from the release tag, or the output of `npm ls dsh-device-mesh`"
+    validations:
+      required: true
+
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH version
+      description: The DeepSeek Harness version the plugin runs against.
+      placeholder: "e.g. 0.2.2-rc.2"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os-install
+    attributes:
+      label: Operating system and installation method
+      description: How the plugin is installed and which platform DSH runs on.
+      options:
+        - Desktop macOS
+        - Desktop Linux
+        - Web server
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: connection
+    attributes:
+      label: Connection method
+      description: How the devices were connected when the problem happened.
+      options:
+        - Direct LAN
+        - Tailscale
+        - paseo-relay
+        - Not connected
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Numbered steps, starting from a fresh DSH session where possible. Say whether it happens every time or intermittently.
+      placeholder: |
+        1. Open Devices -> ...
+        2. Pair from ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-actual
+    attributes:
+      label: Expected and actual behaviour
+      description: What you expected to happen, and what happened instead.
+      placeholder: |
+        Expected: ...
+        Actual: ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and screenshots
+      description: Relevant logs or screenshots. Remove tokens, keys, cookies, `serverId` values, pairing links, QR codes and personal paths before posting.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: sensitive-data
+    attributes:
+      label: Sensitive data removed
+      description: Reports that contain secrets or live credentials will be edited or deleted.
+      options:
+        - label: I removed pairing links, QR codes, `identity.json` contents, private keys, cookies, portal capability URLs, `serverId` values and personal paths from this report and its attachments.
+          required: true

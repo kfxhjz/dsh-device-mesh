@@ -8,9 +8,13 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build:
-    name: Verify and package
+  release:
+    name: Verify, package and publish
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -23,24 +27,27 @@ jobs:
         with:
           version: 11
       - run: npm ci
-      - run: npm run build
-      - run: npm run typecheck
-      - run: npm run lint
-      - run: npm test
+      - name: Verify the tag matches package.json
+        run: node scripts/release-notes.mjs --check-tag
       - name: Install the DSH CLI used by the harness
-        run: npm install --global @deepseek-ai/dsh@0.2.2-rc.1
+        run: npm install --global @deepseek-ai/dsh@0.2.2-rc.2
       - name: Ensure Chrome for the browser E2E
         env:
           CHROME_PATH: /usr/bin/google-chrome
         run: |
           test -x "$CHROME_PATH" || (sudo apt-get update && sudo apt-get install -y google-chrome-stable)
-      - name: Run end-to-end tests
+      - name: Release gate (build, lint, unit, E2E, pack)
         env:
           DSH_CLI: dsh
           CHROME_PATH: /usr/bin/google-chrome
-        run: npm run test:e2e
+        run: npm run release:check
       - name: Pack the publishable tarball
         run: npm pack
+      - name: Write checksums and release notes
+        run: |
+          sha256sum dsh-device-mesh-*.tgz > SHA256SUMS
+          cat SHA256SUMS
+          node scripts/release-notes.mjs --tarball "$(ls dsh-device-mesh-*.tgz)"
       - name: Upload the tarball
         uses: actions/upload-artifact@v4
         with:
@@ -50,5 +57,8 @@ jobs:
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          files: dsh-device-mesh-*.tgz
-          generate_release_notes: true
+          body_path: release-body.md
+          files: |
+            dsh-device-mesh-*.tgz
+            SHA256SUMS
+          fail_on_unmatched_files: true

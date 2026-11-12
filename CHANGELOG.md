@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.1.0 - 2026-11-12
+
 ### Added
 
 - Added a Paseo-style host switcher directly above the sidebar's **Workspaces**
@@ -141,6 +143,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Pairing tickets now validate every endpoint URL before the controller dials it:
+  only `ws://`/`wss://`, no embedded credentials, bounded length, and a
+  non-loopback relay must use `wss://`. A malicious pairing link can no longer
+  point the controller at an arbitrary local or plaintext endpoint.
+- The loopback portal bounds concurrent connections and slow client/header
+  timeouts, and the direct listener's per-address rate-limit table is capped so
+  IPv6 address rotation cannot grow it without bound.
 - Documented the threat model, key and pairing-code handling, vulnerability
   reporting process and a deployment hardening checklist.
 - Least-privilege enforcement: `view` grants are read-only, workspace allowlists
@@ -273,7 +282,7 @@ First MVP release, verified against DSH `0.2.2-rc.1`.
 - Device identity keys are stored in `$DSH_HOME/device-mesh/identity.json` with
   mode `0600`; private keys, tokens and session hashes are never logged.
 - The portal binds `127.0.0.1` on an OS-assigned port and requires a 32-byte
-  capability token exchanged for an `HttpOnly; SameSite=Strict` cookie.
+  capability token exchanged for an `HttpOnly; SameSite=None; Secure` cookie.
 - Revocation disconnects the active session and rejects future handshakes.
 
 ### Tests

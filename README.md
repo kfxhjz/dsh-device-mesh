@@ -1,5 +1,10 @@
 # DSH Device Mesh
 
+[![CI](https://github.com/kfxhjz/dsh-device-mesh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kfxhjz/dsh-device-mesh/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/kfxhjz/dsh-device-mesh)](https://github.com/kfxhjz/dsh-device-mesh/releases)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kfxhjz/dsh-device-mesh/blob/main/LICENSE)
+[![DSH](https://img.shields.io/badge/DSH-0.2.2--rc.2-4D6BFE)](https://github.com/kfxhjz/dsh-device-mesh#requirements)
+
 [简体中文](https://github.com/kfxhjz/dsh-device-mesh/blob/main/README.zh.md) | English
 
 Pair multiple **DeepSeek Harness (DSH)** machines into one device mesh. After a
@@ -7,7 +12,7 @@ one-time pairing, any paired device can open another device's full DSH Web UI �
 conversations, approvals, terminal, files and settings — as if you were sitting
 in front of it.
 
-> Status: MVP (`v0.0.1`), targeting DSH `0.2.2-rc.1`.
+> Status: developer preview (`v0.1.0`), targeting DSH `0.2.2-rc.2`.
 > Design and security model: [docs/DESIGN.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/DESIGN.md).
 > Wire protocol: [docs/PROTOCOL.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/PROTOCOL.md).
 
@@ -25,6 +30,19 @@ that connects separate DSH installations:
 Roles are per connection, not per machine: every install ships both halves, so
 each device can control others and be controlled. The protocol does not depend
 on the operating system.
+
+## Screenshots
+
+The sidebar host switcher lists this host plus paired remotes; selecting a remote
+mirrors its workspaces and sessions (marked **Remote**) while the local tree stays
+intact, and any row opens the full remote UI through the portal.
+
+![Host switcher and remote workspace mirror](https://raw.githubusercontent.com/kfxhjz/dsh-device-mesh/main/docs/assets/sidebar-remote-hosts.png)
+
+![The paired device's DSH Web UI opened through the loopback portal](https://raw.githubusercontent.com/kfxhjz/dsh-device-mesh/main/docs/assets/remote-portal-ui.png)
+
+Both screenshots come from the isolated two-instance E2E run, not from a real
+device profile.
 
 ## Features
 
@@ -120,8 +138,9 @@ Device A (daemon)                              Device B (controller)
 
 ## Requirements
 
-- **DSH** `>=0.2.2-rc.1 <0.3.0` (declared in `package.json` → `engines.dsh`).
-  Incompatible DSH versions are rejected instead of silently degrading.
+- **DSH** `>=0.2.2-rc.1 <0.3.0` (declared in `package.json` → `engines.dsh`);
+  CI and the release gate are pinned to `0.2.2-rc.2`. Incompatible DSH versions
+  are rejected instead of silently degrading.
 - **Node.js** `>=24.9.0` to build the plugin and to run server installs. The
   desktop app ships its own runtime.
 - **npm** (the build uses only the dependencies in `package.json`).
@@ -136,8 +155,16 @@ Device A (daemon)                              Device B (controller)
 ## Install
 
 The plugin is a standard DSH third-party bundle: a host plugin plus a Web client
-plugin. You build it once, install the resulting directory (or `.tgz`) into a
-DSH profile, and restart DSH.
+plugin. Most users can install the prebuilt `.tgz` from the
+[latest release](https://github.com/kfxhjz/dsh-device-mesh/releases/latest)
+without building anything:
+
+```sh
+dsh plugin --profile <profile> add ./dsh-device-mesh-<version>.tgz
+```
+
+The steps below build from source for contributors and for platforms without a
+published artifact.
 
 ### 1. Build from source
 
@@ -372,6 +399,10 @@ Operational notes:
 - **Trusted host code.** A DSH host plugin runs as trusted Node.js code inside
   the DSH process. Installing this plugin is equivalent to running its code; only
   install builds you trust.
+- **Not independently audited.** No third-party security audit has been
+  performed yet; the release reflects an internal review with regression tests on
+  pairing, Noise, portal authentication and revocation. Deploy it on devices you
+  control, follow the hardening checklist, and report suspected issues privately.
 
 Read [SECURITY.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/SECURITY.md) for the threat model, key handling and the
 deployment hardening checklist. The architecture rationale is in
@@ -440,7 +471,7 @@ baseline modules must stay external.
 - **No file, clipboard or screen streaming.** No multi-hop/cascading, and no
   native Paseo protocol interop — only paseo-relay's routing is reused.
 - **Version coupling.** DSH slot and service contracts can change between
-  versions. The plugin is tested against `0.2.2-rc.1` and fails closed on an
+  versions. The plugin is tested against `0.2.2-rc.2` and fails closed on an
   incompatible protocol version.
 - **Windows** is not in the tested matrix.
 
@@ -456,6 +487,8 @@ baseline modules must stay external.
 | [docs/README.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/README.md) · [中文](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/README.zh.md) | Documentation index |
 | [CONTRIBUTING.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/CONTRIBUTING.md) · [中文](https://github.com/kfxhjz/dsh-device-mesh/blob/main/CONTRIBUTING.zh.md) | Development setup, packaging contract, PR rules |
 | [SECURITY.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/SECURITY.md) · [中文](https://github.com/kfxhjz/dsh-device-mesh/blob/main/SECURITY.zh.md) | Vulnerability reporting and deployment hardening |
+| [MAINTAINERS.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/MAINTAINERS.md) | Maintainers, review/release duties and the security triage route |
+| [CODE_OF_CONDUCT.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/CODE_OF_CONDUCT.md) · [中文](https://github.com/kfxhjz/dsh-device-mesh/blob/main/CODE_OF_CONDUCT.zh.md) | Community behaviour expectations |
 | [CHANGELOG.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/CHANGELOG.md) · [中文](https://github.com/kfxhjz/dsh-device-mesh/blob/main/CHANGELOG.zh.md) | Release history |
 | [RELEASE.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/RELEASE.md) · [中文](https://github.com/kfxhjz/dsh-device-mesh/blob/main/RELEASE.zh.md) | Release gate: automated checks, manual matrix, known limitations |
 

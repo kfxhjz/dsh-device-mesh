@@ -1,0 +1,53 @@
+name: Feature request
+description: Suggest a capability, integration or workflow improvement for dsh-device-mesh
+title: "[feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. **Do not report security vulnerabilities here** — use
+        [GitHub Security Advisories](https://github.com/kfxhjz/dsh-device-mesh/security/advisories/new)
+        so the report stays private.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem scenario
+      description: What are you trying to do, and what blocks you today? Describe the real setup (devices, network path, DSH profile) without secrets.
+      placeholder: "I run DSH on a headless Linux server and want to ... but currently ..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behaviour
+    attributes:
+      label: Expected behaviour
+      description: What should the plugin do? Describe the user-visible result, not only the implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you tried, other designs you considered, or related projects. Optional.
+    validations:
+      required: false
+
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH version
+      description: The DeepSeek Harness version you run today.
+      placeholder: "e.g. 0.2.2-rc.2"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: not-security
+    attributes:
+      label: This is not a security vulnerability
+      options:
+        - label: This request does not describe a security vulnerability. I understand that vulnerabilities must be reported privately through GitHub Security Advisories, not as a public issue.
+          required: true

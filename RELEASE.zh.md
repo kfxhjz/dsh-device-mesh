@@ -2,7 +2,7 @@
 
 [English](RELEASE.md) | 简体中文
 
-本文是 `dsh-device-mesh` 的发布门槛，基线 DSH `0.2.2-rc.1`、插件 `0.0.x`
+本文是 `dsh-device-mesh` 的发布门槛，基线 DSH `0.2.2-rc.2`、插件 `0.1.x`
 （开发者预览）。以下任一项未完成，不应打 tag。
 
 ## 1. 自动化门槛
@@ -66,18 +66,20 @@ E2E 可选环境变量：
 
 ## 4. 仓库与发布包
 
-- [ ] `package.json` 版本与 `CHANGELOG.md` 一致（`0.0.x`）。
+- [ ] `package.json` 版本与 `CHANGELOG.md` 一致（`0.1.x`）。
 - [ ] CHANGELOG 有本轮带日期的条目，无死链。
 - [ ] Git 历史是预期的公开历史（无密钥、无个人机器路径；作者身份是有意选择）。
 - [ ] `npm pack` 产物装进临时 `DSH_HOME` 并成功启动一次：
 
   ```sh
-  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.0.1.tgz
+  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.1.0.tgz
   DSH_HOME=... dsh web --no-open --port 0
   ```
 
-- [ ] 打 `v0.0.x` tag 并发布 release notes（安装命令、校验和、平台矩阵、已知限制）。
-      npm 发布可选；`.tgz` 是受支持的交付物。
+- [ ] 打 `v0.1.x` tag 并发布 release notes（安装命令、校验和、平台矩阵、已知限制）。
+      推送 tag 会触发 `.github/workflows/release.yml`：校验 tag 与 `package.json`、重跑
+      门槛、生成 `SHA256SUMS`，并从 `CHANGELOG.md` 生成 release body。npm 发布可选；
+      `.tgz` 是受支持的交付物。
 
 ## 5. 每次 release notes 都要重复的已知限制
 

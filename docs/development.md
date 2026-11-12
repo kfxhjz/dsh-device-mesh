@@ -1,7 +1,7 @@
 # Development and Maintenance Guide
 [简体中文](zh/development.zh.md) | English
 
-Status: applies to plugin `0.0.1` against DSH `0.2.2-rc.1`. This guide is for people who build, extend, review
+Status: applies to plugin `0.1.0` against DSH `0.2.2-rc.2`. This guide is for people who build, extend, review
 or release the plugin. It covers the repository layout, DSH packaging and client-bundle contracts, the local
 loop, host and UI integration seams, testing, debugging and releases.
 
@@ -24,7 +24,7 @@ restating them.
 
 ## 1. Scope and version baseline
 
-- **DSH baseline:** `0.2.2-rc.1`; `package.json` declares
+- **DSH baseline:** `0.2.2-rc.2`; `package.json` declares
   `"engines": { "dsh": ">=0.2.2-rc.1 <0.3.0", "node": ">=24.9.0" }`.
 - **Node:** 24.9+ to build and run `dsh web`; the desktop app ships its own
   runtime, so this matters mainly for development and CI.
@@ -338,10 +338,14 @@ plain checkout.
 Use `npm run release:check` before tagging: it runs the build, typecheck, unit and E2E suites plus `npm pack --dry-run`,
 matching the automated half of [`RELEASE.md`](../RELEASE.md).
 
-CI runs `npm ci`, `npm run build`, `npm run typecheck` and `npm test` on Ubuntu and macOS, then
-`npm run test:e2e` on Ubuntu with `DSH_CLI=dsh` and DSH `0.2.2-rc.1` installed globally. CI does not ship a
-paseo-relay binary, so the relay E2E case is skipped there; run it locally before a release that changes relay
-behavior.
+CI runs `npm ci`, `npm run build`, `npm run typecheck` and `npm test` on Ubuntu and macOS for Node.js 24 and
+26, then `npm run test:e2e` on Ubuntu with `DSH_CLI=dsh` and DSH `0.2.2-rc.2` installed globally. CI does not
+ship a paseo-relay binary, so the relay E2E case is skipped there; run it locally before a release that changes
+relay behavior.
+
+The release workflow (`.github/workflows/release.yml`) runs the same gate through `npm run release:check`,
+verifies that the `v*` tag matches `package.json`, writes `SHA256SUMS`, and publishes the tarball with release
+notes generated from `CHANGELOG.md` by `scripts/release-notes.mjs`.
 
 Tests must not require a real `$DSH_HOME`, a network peer or a camera. Generate fixtures at test time under a
 temporary directory. Never paste real device names, LAN addresses, host IDs, pairing links or tokens into a

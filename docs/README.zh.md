@@ -29,6 +29,8 @@
 | [README.zh.md](../README.zh.md) | 面向用户的概览、安装、配对与中继配置。 |
 | [CONTRIBUTING.zh.md](../CONTRIBUTING.zh.md) | 开发环境、命令、bundle 契约、PR 规则与测试要求。 |
 | [SECURITY.zh.md](../SECURITY.zh.md) | 支持的版本、私密漏洞报告、威胁模型与部署加固。 |
+| [MAINTAINERS.md](../MAINTAINERS.md) | 现任维护者、review/发布职责、安全分诊渠道与 bus factor 说明。 |
+| [CODE_OF_CONDUCT.zh.md](../CODE_OF_CONDUCT.zh.md) · [English](../CODE_OF_CONDUCT.md) | 社区行为准则与执行方式。 |
 | [CHANGELOG.zh.md](../CHANGELOG.zh.md) | Keep a Changelog 格式的发布历史。 |
 | [RELEASE.zh.md](../RELEASE.zh.md) | 发布门槛：自动化检查、人工验证矩阵与已知限制。 |
 | [LICENSE](../LICENSE) | MIT 许可证。 |

@@ -1,7 +1,7 @@
 # 开发与维护指南
 [English](../development.md) | 简体中文
 
-状态：适用于插件 `0.0.1`，面向 DSH `0.2.2-rc.1`。本指南面向构建、扩展、评审或发布该插件的人，涵盖仓库布局、DSH 打包与 client bundle 契约、本地开发回路、host 与 UI 集成接缝、测试、调试与发布。
+状态：适用于插件 `0.1.0`，面向 DSH `0.2.2-rc.2`。本指南面向构建、扩展、评审或发布该插件的人，涵盖仓库布局、DSH 打包与 client bundle 契约、本地开发回路、host 与 UI 集成接缝、测试、调试与发布。
 
 线路契约以[协议文档](PROTOCOL.zh.md)为规范；架构、安全理由与路线图见[设计文档](DESIGN.zh.md)。本指南说明如何在这份代码上工作，并链接到那些文档，而不是复述它们。
 
@@ -20,7 +20,7 @@
 
 ## 1. 范围与版本基线
 
-- **DSH 基线：** `0.2.2-rc.1`；`package.json` 声明
+- **DSH 基线：** `0.2.2-rc.2`；`package.json` 声明
   `"engines": { "dsh": ">=0.2.2-rc.1 <0.3.0", "node": ">=24.9.0" }`。
 - **Node：** 构建和运行 `dsh web` 需要 24.9+；桌面应用自带运行时，因此这主要影响
   开发与 CI。
@@ -323,10 +323,14 @@ Android / iOS / 鸿蒙的原生外壳是另外的工作。深链是尽力而为�
 打 tag 前运行 `npm run release:check`：执行构建、typecheck、单元与 E2E、`npm pack --dry-run`，
 对应 [`RELEASE.zh.md`](../../RELEASE.zh.md) 的自动化门槛。
 
-CI 在 Ubuntu 与 macOS 上运行 `npm ci`、`npm run build`、`npm run typecheck` 和
-`npm test`，然后在 Ubuntu 上以全局安装的 DSH `0.2.2-rc.1` 和 `DSH_CLI=dsh` 运行
-`npm run test:e2e`。CI 不附带 paseo-relay 二进制，因此 relay E2E 用例在那里会被跳过；
+CI 在 Ubuntu 与 macOS 上、Node.js 24 和 26 两个版本运行 `npm ci`、`npm run build`、
+`npm run typecheck` 和 `npm test`，然后在 Ubuntu 上以全局安装的 DSH `0.2.2-rc.2` 和
+`DSH_CLI=dsh` 运行 `npm run test:e2e`。CI 不附带 paseo-relay 二进制，因此 relay E2E 用例在那里会被跳过；
 在发布涉及 relay 行为变更的版本前，请在本地运行它。
+
+发布工作流（`.github/workflows/release.yml`）通过 `npm run release:check` 运行同一套门槛，校验 `v*`
+tag 与 `package.json` 版本一致，生成 `SHA256SUMS`，并用 `scripts/release-notes.mjs` 从 `CHANGELOG.md`
+生成发布说明后发布 tarball。
 
 测试不得依赖真实的 `$DSH_HOME`、网络对端或相机。在测试时于临时目录下生成 fixture。
 绝不要把真实设备名、LAN 地址、host ID、配对链接或令牌粘贴进 fixture。

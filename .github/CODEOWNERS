@@ -1,0 +1,9 @@
+# Code owners for dsh-device-mesh.
+#
+# Every path is owned by the maintainer listed in MAINTAINERS.md. Reviews from
+# the owner are requested automatically on pull requests. Keep this file in sync
+# when maintainers change.
+#
+# https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+* @kfxhjz

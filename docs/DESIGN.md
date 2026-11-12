@@ -1,7 +1,7 @@
 # DSH Device Mesh — Architecture and Security Design
 [简体中文](zh/DESIGN.zh.md) | English
 
-Status: **MVP** (plugin `0.0.1`, targeting DSH `0.2.2-rc.1`). The wire contract is
+Status: **developer preview** (plugin `0.1.0`, targeting DSH `0.2.2-rc.2`). The wire contract is
 normative in [PROTOCOL.md](PROTOCOL.md); this document explains why the system is
 built this way, where its boundaries are, and how it evolves.
 
@@ -431,7 +431,7 @@ Known gaps: manual desktop-window/QR-camera verification, mobile builds
 5. **Operations hardening.** Rotate keys/`serverId`, add admission rate limiting
    and improve relay observability without weakening opaque frames.
 
-Risks: DSH slot/service contracts evolve (baseline `0.2.2-rc.1`), portal auth
+Risks: DSH slot/service contracts evolve (baseline `0.2.2-rc.2`), portal auth
 needs per-release verification, and the relay remains a metadata/DoS trust point.
 If portal authentication is unavailable, remote control is unavailable; there is
 no native RPC-only fallback in the MVP. Native RPC control is Phase 2.

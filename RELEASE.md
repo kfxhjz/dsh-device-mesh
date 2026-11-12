@@ -3,7 +3,7 @@
 [简体中文](RELEASE.zh.md) | English
 
 This document is the release gate for `dsh-device-mesh`. It assumes DSH
-`0.2.2-rc.1` and plugin `0.0.x` (developer preview). Do not tag a release while
+`0.2.2-rc.2` and plugin `0.1.x` (developer preview). Do not tag a release while
 any item below is unchecked.
 
 ## 1. Automated gate
@@ -70,20 +70,23 @@ step; a single failed “remote prompt/approval” item blocks the release.
 
 ## 4. Repository and package
 
-- [ ] Version in `package.json` matches `CHANGELOG.md` (`0.0.x`).
+- [ ] Version in `package.json` matches `CHANGELOG.md` (`0.1.x`).
 - [ ] `CHANGELOG.md` has a dated section for the release; no dead links.
 - [ ] Git history is the intended public history (no secrets, no personal
       machine paths; author identity is deliberate).
 - [ ] `npm pack` tarball installed into a throwaway `DSH_HOME` and booted once:
 
   ```sh
-  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.0.1.tgz
+  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.1.0.tgz
   DSH_HOME=... dsh web --no-open --port 0
   ```
 
-- [ ] Tag `v0.0.x` and publish release notes (install command, checksum,
-      platform matrix, known limitations). Publishing to npm is optional; the
-      `.tgz` is a supported artifact.
+- [ ] Tag `v0.1.x` and publish release notes (install command, checksum,
+      platform matrix, known limitations). The tag pushes
+      `.github/workflows/release.yml`, which verifies the tag against
+      `package.json`, reruns the gate, writes `SHA256SUMS`, and generates the
+      release body from `CHANGELOG.md`. Publishing to npm is optional; the `.tgz`
+      is a supported artifact.
 
 ## 5. Known limitations to repeat in every release note
 

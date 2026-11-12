@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/kfxhjz/dsh-device-mesh/security/advisories/new
+    about: Report vulnerabilities privately through GitHub Security Advisories. Do not open a public issue.
+  - name: Questions and Discussions
+    url: https://github.com/kfxhjz/dsh-device-mesh/discussions
+    about: Ask questions, share your setup and discuss ideas with the community.

@@ -2,7 +2,7 @@
 
 [English](../DESIGN.md) | 简体中文
 
-状态：**MVP**（插件 `0.0.1`，面向 DSH `0.2.2-rc.1`）。线路契约以
+状态：**开发者预览**（插件 `0.1.0`，面向 DSH `0.2.2-rc.2`）。线路契约以
 [PROTOCOL.zh.md](PROTOCOL.zh.md) 为准；本文解释为什么这样设计、边界在哪里、后续
 怎么走。
 
@@ -348,7 +348,7 @@ Chromium 88+、Firefox 90+、Safari 16.4+（以及 Electron 外壳）。更旧�
 5. **运维加固**：轮换密钥与 `serverId`，增加显式准入限速，在不破坏不透明帧的前提下
    改善 relay 侧可观测性。
 
-风险：DSH 的 slot/服务契约会演进（MVP 基线 `0.2.2-rc.1`）；portal 认证需随 DSH
+风险：DSH 的 slot/服务契约会演进（基线 `0.2.2-rc.2`）；portal 认证需随 DSH
 版本复验；relay 仍是元数据/拒绝服务的信任点。若 portal 认证不可用，远程控制即不可用；
 MVP 没有仅原生 RPC 的降级路径，原生 RPC 控制属于第二阶段。
 
