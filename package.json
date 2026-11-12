@@ -72,8 +72,8 @@
     "@types/node": "^24.10.1",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.2",
-    "oxlint": "1.81.0",
-    "oxlint-tsgolint": "7.0.2001",
+    "oxlint": "1.93.0",
+    "oxlint-tsgolint": "7.0.2006",
     "playwright-core": "^1.65.0",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
