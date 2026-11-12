@@ -76,7 +76,7 @@
     "oxlint-tsgolint": "7.0.2001",
     "playwright-core": "^1.65.0",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "repository": {
     "type": "git",
