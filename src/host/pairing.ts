@@ -31,7 +31,13 @@ import {
   fromBase64Url,
   toBase64Url,
 } from '../shared/protocol.ts'
-import { isRecord, MAX_PENDING_PAIRINGS, PAIRING_REQUEST_TTL_MS, PAIRING_TICKET_TTL_MS } from './config.ts'
+import {
+  isLoopbackHostname,
+  isRecord,
+  MAX_PENDING_PAIRINGS,
+  PAIRING_REQUEST_TTL_MS,
+  PAIRING_TICKET_TTL_MS,
+} from './config.ts'
 import type { MeshStore } from './store.ts'
 import { deviceIdFromSignPublicKey, sha256Hex, signEd25519, verifyEd25519 } from './crypto.ts'
 
@@ -43,6 +49,15 @@ const DECISION_RETENTION_MS = 5 * 60 * 1000
 
 /** Maximum encoded ticket size accepted from a link (defensive bound). */
 const MAX_TICKET_BYTES = 8 * 1024
+
+/** Maximum endpoint URL length accepted from a ticket (defensive bound). */
+const MAX_ENDPOINT_URL_LENGTH = 512
+
+/** Maximum relay `serverId` length accepted from a ticket. */
+const MAX_RELAY_SERVER_ID_LENGTH = 256
+
+/** Relay `serverId` characters that would corrupt the query string. */
+const RELAY_SERVER_ID_FORBIDDEN = /[\u0000-\u0020\u007f]/u
 
 /** Structured pairing failure with a wire error code. */
 export class PairingError extends Error {
@@ -139,23 +154,67 @@ function invalid(message: string): PairingError {
   return new PairingError('mesh/bad-request', message)
 }
 
+/**
+ * Validate one endpoint URL carried by a ticket.
+ *
+ * A pairing link is untrusted input: the controller dials whatever endpoints the
+ * ticket lists before the local user approves anything. Restrict endpoints to
+ * WebSocket transports, reject embedded credentials, and keep a public relay on
+ * TLS (SECURITY.md: a public relay must use `wss://`). Loopback `ws://` stays
+ * accepted for a local relay and for the isolated two-instance E2E runs.
+ *
+ * The original string is returned unchanged: ticket signatures cover the
+ * canonical JSON of the endpoint objects, so normalizing the URL here would make
+ * a valid ticket fail verification.
+ *
+ * @param kind - endpoint kind, for error messages.
+ * @param url - raw endpoint URL from the ticket.
+ * @returns the validated URL text, unchanged.
+ * @throws {PairingError} when the endpoint would be dialed unsafely.
+ */
+function parseEndpointUrl(kind: 'direct' | 'relay', url: unknown): string {
+  if (typeof url !== 'string' || url.length === 0) {
+    throw invalid(`pairing ticket ${kind} endpoint has no url`)
+  }
+  if (url.length > MAX_ENDPOINT_URL_LENGTH) {
+    throw invalid(`pairing ticket ${kind} endpoint url is too long`)
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    throw invalid(`pairing ticket ${kind} endpoint is not a valid url`)
+  }
+  if (parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') {
+    throw invalid(`pairing ticket ${kind} endpoint must use ws:// or wss://`)
+  }
+  if (parsed.username.length > 0 || parsed.password.length > 0) {
+    throw invalid(`pairing ticket ${kind} endpoint must not carry credentials`)
+  }
+  if (parsed.hostname.length === 0) {
+    throw invalid(`pairing ticket ${kind} endpoint has no host`)
+  }
+  if (kind === 'relay' && parsed.protocol === 'ws:' && !isLoopbackHostname(parsed.hostname)) {
+    throw invalid('pairing ticket relay endpoint must use wss:// for non-loopback hosts')
+  }
+  return url
+}
+
 function parseEndpoint(value: unknown): PairingEndpoint {
   if (!isRecord(value)) throw invalid('pairing ticket endpoint is not an object')
   if (value.k === 'direct') {
-    if (typeof value.url !== 'string' || value.url.length === 0) {
-      throw invalid('pairing ticket direct endpoint has no url')
-    }
-    return { k: 'direct', url: value.url }
+    return { k: 'direct', url: parseEndpointUrl('direct', value.url) }
   }
   if (value.k === 'relay') {
-    if (typeof value.url !== 'string' || value.url.length === 0) {
-      throw invalid('pairing ticket relay endpoint has no url')
-    }
+    const url = parseEndpointUrl('relay', value.url)
     if (typeof value.sid !== 'string' || value.sid.length === 0) {
       throw invalid('pairing ticket relay endpoint has no server id')
     }
+    if (value.sid.length > MAX_RELAY_SERVER_ID_LENGTH || RELAY_SERVER_ID_FORBIDDEN.test(value.sid)) {
+      throw invalid('pairing ticket relay server id is invalid')
+    }
     if (value.v !== 1 && value.v !== 2) throw invalid('pairing ticket relay generation is invalid')
-    return { k: 'relay', url: value.url, sid: value.sid, v: value.v }
+    return { k: 'relay', url, sid: value.sid, v: value.v }
   }
   throw invalid('pairing ticket endpoint kind is unknown')
 }

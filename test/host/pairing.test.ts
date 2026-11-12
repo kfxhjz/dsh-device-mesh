@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
-import type { DeviceDescriptor, PairingEndpoint } from '../../src/shared/protocol.ts'
+import type { DeviceDescriptor, PairingEndpoint, PairingTicket } from '../../src/shared/protocol.ts'
 import {
   PAIRING_URI_PREFIX,
   decodeUtf8,
@@ -137,6 +137,45 @@ describe('pairing: tickets', () => {
     })
     assert.equal(created.tokenHash, hashPairingToken(created.ticket.tok))
     assert.equal(parsePairingLink(created.link).id, identity.deviceId)
+  })
+})
+
+describe('pairing: ticket endpoint validation', () => {
+  const identity = generateDeviceIdentity({ name: 'A' })
+  const token = toBase64Url(new Uint8Array(32).fill(5))
+
+  function parseEndpoints(endpoints: PairingEndpoint[]): PairingTicket {
+    const created = createPairingTicket({ identity, endpoints, token, now: Date.now() })
+    return parsePairingLink(created.link)
+  }
+
+  it('accepts direct WebSocket, loopback plaintext relay and public wss relay', () => {
+    const endpoints: PairingEndpoint[] = [
+      { k: 'direct', url: 'ws://192.168.1.2:45871/mesh' },
+      { k: 'relay', url: 'ws://127.0.0.1:4000/ws', sid: 'local-server-id', v: 2 },
+      { k: 'relay', url: 'wss://relay.example.com/ws', sid: 'secret-server-id', v: 2 },
+    ]
+    assert.deepEqual(parseEndpoints(endpoints).eps, endpoints)
+  })
+
+  it('rejects unsafe or malformed endpoints before the ticket is dialed', () => {
+    const cases: PairingEndpoint[][] = [
+      [{ k: 'direct', url: 'http://192.168.1.2:45871/mesh' }],
+      [{ k: 'direct', url: 'file:///etc/passwd' }],
+      [{ k: 'direct', url: 'ws://user:pass@192.168.1.2:45871/mesh' }],
+      [{ k: 'direct', url: `ws://${'a'.repeat(512)}` }],
+      [{ k: 'relay', url: 'ws://relay.example.com/ws', sid: 'secret-server-id', v: 2 }],
+      [{ k: 'relay', url: 'https://relay.example.com/ws', sid: 'secret-server-id', v: 2 }],
+      [{ k: 'relay', url: 'wss://relay.example.com/ws', sid: '', v: 2 }],
+      [{ k: 'relay', url: 'wss://relay.example.com/ws', sid: 'bad sid', v: 2 }],
+    ]
+    for (const endpoints of cases) {
+      assert.throws(
+        () => parseEndpoints(endpoints),
+        (error: unknown) => error instanceof PairingError && error.code === 'mesh/bad-request',
+        JSON.stringify(endpoints),
+      )
+    }
   })
 })
 

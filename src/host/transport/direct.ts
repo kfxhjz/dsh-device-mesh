@@ -33,6 +33,12 @@ export const DIRECT_WS_PATH = '/mesh'
 /** How long the os heartbeat waits for a pong. Matches PROTOCOL.md §3.2. */
 const DEFAULT_DIRECT_HEARTBEAT_MS = 20_000
 
+/**
+ * Bound on per-source-address rate-limit windows. Expired windows are swept
+ * first; an attacker rotating IPv6 sources must not grow the table without bound.
+ */
+const MAX_TRACKED_ATTEMPT_ADDRESSES = 1_024
+
 export interface DirectListenerOptions extends DirectOptions {
   /** URL path served by the listener; defaults to `/mesh`. */
   readonly path?: string
@@ -264,9 +270,14 @@ export async function startDirectListener(
       const window = attemptWindows.get(peerIp)
       if (window === undefined || now >= window.resetAt) {
         attemptWindows.set(peerIp, { count: 1, resetAt: now + 60_000 })
-        if (attemptWindows.size > 1_024) {
+        if (attemptWindows.size > MAX_TRACKED_ATTEMPT_ADDRESSES) {
           for (const [address, entry] of attemptWindows) {
             if (now >= entry.resetAt) attemptWindows.delete(address)
+          }
+          while (attemptWindows.size > MAX_TRACKED_ATTEMPT_ADDRESSES) {
+            const oldest = attemptWindows.keys().next().value
+            if (oldest === undefined) break
+            attemptWindows.delete(oldest)
           }
         }
       } else if (window.count >= maxAttemptsPerIpPerMinute) {

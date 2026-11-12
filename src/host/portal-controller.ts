@@ -6,8 +6,8 @@
  * Security model (PROTOCOL.md §6.1, §9):
  *   - binds `127.0.0.1` only, on an OS-assigned port;
  *   - every request needs the 32-byte capability cookie; the URL's `?token=`
- *     trades for an `HttpOnly; SameSite=Strict` cookie on first navigation,
- *     and the token is stripped before any request is forwarded;
+ *     trades for an `HttpOnly; SameSite=None; Secure` cookie on first
+ *     navigation, and the token is stripped before any request is forwarded;
  *   - requests must carry this portal's exact `Host` and, for WebSockets, its
  *     exact `Origin`; cross-site browser requests are rejected so another
  *     loopback port cannot reuse the cookie (ports share the 127.0.0.1 jar);
@@ -49,6 +49,22 @@ const MAX_BROWSER_WS_BUFFERED_BYTES = 8 * 1024 * 1024
 
 /** Cap on concurrent multiplexed streams per portal (PROTOCOL.md §6.2). */
 const DEFAULT_MAX_CONCURRENT_STREAMS = 32
+
+/** Hard cap on local HTTP/WebSocket connections held by one portal. */
+const PORTAL_MAX_CONNECTIONS = 256
+
+/** Bound on receiving request headers before the socket is dropped. */
+const PORTAL_HEADERS_TIMEOUT_MS = 10_000
+
+/** Bound on one local HTTP request before the socket is dropped. */
+const PORTAL_REQUEST_TIMEOUT_MS = 30_000
+
+/**
+ * Cap on one browser WebSocket message. The portal re-frames larger messages
+ * into 32 KiB Mesh stream chunks, so a single local message never needs MiB-scale
+ * buffering; the bound limits memory a compromised remote UI can force per tab.
+ */
+const MAX_BROWSER_WS_MESSAGE_BYTES = 8 * 1024 * 1024
 
 /** Maximum bytes read from the remote HTML when building the asset manifest. */
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024
@@ -509,7 +525,16 @@ export class PortalController {
     server.on('clientError', (_error, socket) => {
       socket.destroy()
     })
-    this.wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 64 * 1024 * 1024 })
+    // The portal is loopback-only, but an unbounded local listener is still a
+    // leftover resource for local processes. Bound connections and slow clients.
+    server.maxConnections = PORTAL_MAX_CONNECTIONS
+    server.headersTimeout = PORTAL_HEADERS_TIMEOUT_MS
+    server.requestTimeout = PORTAL_REQUEST_TIMEOUT_MS
+    this.wss = new WebSocketServer({
+      noServer: true,
+      perMessageDeflate: false,
+      maxPayload: MAX_BROWSER_WS_MESSAGE_BYTES,
+    })
     this.lastActivity = this.now()
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error): void => {

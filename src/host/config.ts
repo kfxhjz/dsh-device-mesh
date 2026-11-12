@@ -441,7 +441,7 @@ function optionalLogLevel(value: unknown): MeshLogLevel | undefined {
 }
 
 /** True for a hostname that never leaves the local machine. */
-function isLoopbackHostname(hostname: string): boolean {
+export function isLoopbackHostname(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[/u, '').replace(/\]$/u, '')
   return host === '127.0.0.1' || host === '::1' || host === 'localhost'
 }
