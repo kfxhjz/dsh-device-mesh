@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- Upgraded the toolchain and dependencies to their latest releases: TypeScript 7
+  (native compiler), `@types/node` 26, Oxlint 1.93 with `oxlint-tsgolint`
+  7.0.2006, tsx 4.23, `ws` 8.22 and `@types/ws` 8.18. CI and release workflows
+  now use `actions/checkout@v7`, `actions/setup-node@v7`,
+  `pnpm/action-setup@v6`, `actions/upload-artifact@v7`,
+  `github/codeql-action@v4` and `softprops/action-gh-release@v3`.
+- Added an npm `overrides` entry pinning `minimatch` to the patched 11.x line, so
+  the development-only ESLint chain loaded by the Oxlint `@stylistic` plugin no
+  longer reports the globbing denial-of-service advisory.
+
 ## 0.1.0 - 2026-11-12
 
 ### Added

@@ -9,6 +9,17 @@
 
 ## Unreleased
 
+### 变更（Changed）
+
+- 工具链与依赖升级到最新版本：TypeScript 7（原生编译器）、`@types/node` 26、
+  Oxlint 1.93 与 `oxlint-tsgolint` 7.0.2006、tsx 4.23、`ws` 8.22、
+  `@types/ws` 8.18。CI 与发布工作流改用 `actions/checkout@v7`、
+  `actions/setup-node@v7`、`pnpm/action-setup@v6`、
+  `actions/upload-artifact@v7`、`github/codeql-action@v4` 与
+  `softprops/action-gh-release@v3`。
+- 新增 npm `overrides`，把 `minimatch` 固定到已修复的 11.x 分支，Oxlint
+  `@stylistic` 插件加载的开发期 ESLint 依赖链不再报告 glob 拒绝服务公告。
+
 ## 0.1.0 - 2026-11-12
 
 ### 新增（Added）
