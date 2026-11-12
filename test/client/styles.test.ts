@@ -10,5 +10,7 @@ test('stylesheet has a stable injection id and uses theme tokens', () => {
   assert.ok(styles.includes('.dm-sidebar-host'), 'sidebar host bar class')
   assert.ok(styles.includes('var(--dsw-'), 'colours and typography come from DSH theme tokens')
   assert.ok(styles.includes('@media (hover: hover)'), 'hover-only affordances are guarded')
-  assert.equal((styles.match(/\{/gu) ?? []).length, (styles.match(/\}/gu) ?? []).length, 'balanced braces')
+  // The QR plate is the only literal colour; everything else must be a token.
+  const hexColours = (styles.match(/#[0-9a-fA-F]{3,8}/gu) ?? []).map(value => value.toLowerCase())
+  assert.deepEqual(hexColours, ['#ffffff'])
 })

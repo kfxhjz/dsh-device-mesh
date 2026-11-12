@@ -26,14 +26,17 @@ if (typeof tag === 'string' && tag.length > 0 && tag !== `v${version}`) {
   console.error(`release tag ${tag} does not match package.json version v${version}`)
   process.exit(1)
 }
-if (checkTagOnly) {
-  process.stdout.write(`release tag v${version} matches package.json\n`)
-  process.exit(0)
-}
-
 const changelog = await readFile('CHANGELOG.md', 'utf8')
 const lines = changelog.split('\n')
 const start = lines.findIndex(line => line.startsWith(`## ${version} `) || line === `## ${version}`)
+if (checkTagOnly) {
+  if (start === -1) {
+    console.error(`CHANGELOG.md has no "## ${version} - <date>" section`)
+    process.exit(1)
+  }
+  process.stdout.write(`release tag v${version} matches package.json and CHANGELOG.md has its section\n`)
+  process.exit(0)
+}
 if (start === -1) {
   console.error(`CHANGELOG.md has no "## ${version} - <date>" section`)
   process.exit(1)

@@ -6,15 +6,17 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    # Nightly full run (including the real paseo-relay E2E) at 02:30 UTC.
+    # Nightly full run (including the real paseo-relay E2E and the soak suite)
+    # at 02:30 UTC.
     - cron: '30 2 * * *'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A scheduled run must not cancel (or be cancelled by) a push/PR run on main.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'schedule' && 'nightly' || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   check:
@@ -24,11 +26,6 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         node: [24, 26]
-        include:
-          # Windows is not a supported runtime target yet, but keeping the
-          # build/typecheck/lint/unit suites green there prevents platform drift.
-          - os: windows-latest
-            node: 24
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -45,13 +42,45 @@ jobs:
           grep -q 'total files: 11' /tmp/pack.log
           grep -q 'client.js' /tmp/pack.log
           grep -q 'lib/host/index.js' /tmp/pack.log
-        shell: bash
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
-      - name: Coverage gate (full source, Node 26)
-        if: matrix.os == 'ubuntu-latest' && matrix.node == 26
+      - name: Coverage gate
+        # Node 26 runs the full include-all gate; Node 24 exercises the
+        # loaded-file fallback in scripts/coverage.mjs.
+        if: matrix.os == 'ubuntu-latest'
         run: npm run test:coverage
+      - name: Soak (nightly only)
+        if: github.event_name == 'schedule' && matrix.os == 'ubuntu-latest' && matrix.node == 26
+        env:
+          DSH_MESH_SOAK: '1'
+        run: node --import tsx --test test/core/soak.test.ts
+
+  check-windows:
+    # Windows is not a supported runtime target yet, but keeping the
+    # build/typecheck/lint/unit suites green there prevents platform drift.
+    # It is a separate job so a Windows-only failure does not gate the E2E jobs.
+    name: Check (windows-latest, node 24)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Verify the packed tarball contains both runtime entries
+        shell: bash
+        run: |
+          npm pack --dry-run 2>&1 | tee /tmp/pack.log
+          grep -q 'total files: 11' /tmp/pack.log
+          grep -q 'client.js' /tmp/pack.log
+          grep -q 'lib/host/index.js' /tmp/pack.log
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
 
   e2e:
     name: E2E (stock dsh web)
@@ -62,7 +91,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          # Matches the release gate, which also runs on Node 26.
+          node-version: 26
           cache: npm
       - uses: pnpm/action-setup@v6
         with:
@@ -98,7 +128,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           cache: npm
       - uses: pnpm/action-setup@v6
         with:
@@ -107,20 +137,26 @@ jobs:
       - run: npm run build
       - name: Install the DSH CLI used by the harness
         run: npm install --global @deepseek-ai/dsh@0.2.2-rc.2
-      - name: Restore the cargo cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            /tmp/paseo-relay-target
-          key: paseo-relay-${{ runner.os }}-v0.1.2
-      - name: Build the pinned paseo-relay binary
+      - name: Ensure a Rust toolchain and record its version
+        id: rust
         run: |
           if ! command -v cargo >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
             . "$HOME/.cargo/env"
           fi
+          rustc -V
+          echo "version=$(rustc -V | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+      - name: Restore the cargo cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            /tmp/paseo-relay-target
+          key: paseo-relay-${{ runner.os }}-${{ steps.rust.outputs.version }}-v0.1.2
+      - name: Build the pinned paseo-relay binary
+        run: |
+          if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
           git clone --depth 1 --branch v0.1.2 https://github.com/kfxhjz/paseo-relay /tmp/paseo-relay
           cd /tmp/paseo-relay
           CARGO_TARGET_DIR=/tmp/paseo-relay-target cargo build --release

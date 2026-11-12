@@ -86,31 +86,36 @@ test('mounts the host bar above the native header and drives the switcher menu',
     connectDevice: () => { opened.push('connect') },
   })
 
-  const bar = document.querySelector('[data-device-mesh-host-bar]')
-  assert.ok(bar)
-  const header = document.querySelector('.sectionHeader')
-  assert.ok(header)
-  assert.equal(bar.nextElementSibling, header)
-  assert.equal(bar.querySelector('[data-dm-host-title]')?.textContent, 'host.section')
-  assert.ok(bar.querySelector('[data-device-mesh-host-toggle]')?.textContent?.includes('Laptop'))
-  assert.ok(document.querySelector('[data-device-mesh-remote-workspaces]'))
+  try {
+    const bar = document.querySelector('[data-device-mesh-host-bar]')
+    assert.ok(bar)
+    const header = document.querySelector('.sectionHeader')
+    assert.ok(header)
+    assert.equal(bar.nextElementSibling, header)
+    assert.equal(bar.querySelector('[data-dm-host-title]')?.textContent, 'host.section')
+    assert.ok(bar.querySelector('[data-device-mesh-host-toggle]')?.textContent?.includes('Laptop'))
+    assert.ok(document.querySelector('[data-device-mesh-remote-workspaces]'))
 
-  const toggle = bar.querySelector('[data-device-mesh-host-toggle]')
-  assert.ok(toggle)
-  toggle.dispatchEvent(new window.MouseEvent('click', { bubbles: true }) as unknown as Event)
-  const menu = document.querySelector('[data-device-mesh-host-menu]')
-  assert.ok(menu)
-  assert.ok(menu.textContent?.includes('Laptop'))
-  assert.ok(menu.textContent?.includes('Studio'))
-  assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+    const toggle = bar.querySelector('[data-device-mesh-host-toggle]')
+    assert.ok(toggle)
+    toggle.dispatchEvent(new window.MouseEvent('click', { bubbles: true }) as unknown as Event)
+    const menu = document.querySelector('[data-device-mesh-host-menu]')
+    assert.ok(menu)
+    assert.ok(menu.textContent?.includes('Laptop'))
+    assert.ok(menu.textContent?.includes('Studio'))
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true')
 
-  const add = menu.querySelector('[data-dm-add-host]')
-  assert.ok(add)
-  add.dispatchEvent(new window.MouseEvent('click', { bubbles: true }) as unknown as Event)
-  assert.deepEqual(opened, ['devices'])
-  assert.equal(document.querySelector('[data-device-mesh-host-menu]'), null)
+    const add = menu.querySelector('[data-dm-add-host]')
+    assert.ok(add)
+    add.dispatchEvent(new window.MouseEvent('click', { bubbles: true }) as unknown as Event)
+    assert.deepEqual(opened, ['devices'])
+    assert.equal(document.querySelector('[data-device-mesh-host-menu]'), null)
+  } finally {
+    // Always tear down the interval, MutationObserver and store subscription,
+    // even when an assertion above fails, so a failing test cannot hang CI.
+    teardown()
+  }
 
-  teardown()
   assert.equal(document.querySelector('[data-device-mesh-host-bar]'), null)
   assert.equal(document.querySelector('[data-device-mesh-remote-workspaces]'), null)
 })
