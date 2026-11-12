@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.1.2 - 2026-11-12
+
+### Fixed
+
+- The sidebar remote mirror now re-requests the selected device's workspace
+  listing every 5 seconds while that host stays selected, so running, awaiting
+  and unread session state tracks the daemon instead of staying frozen at the
+  first listing.
+- Running remote sessions render the native-style spinning status indicator
+  (with a `Running` tooltip and accessible label) in both the cloned native rows
+  and the fallback rows; previously a running session showed no live indicator.
+
 ## 0.1.1 - 2026-11-12
 
 ### Added
@@ -355,6 +367,7 @@ First MVP release, verified against DSH `0.2.2-rc.1`.
   in the boot graph, two-device direct pairing through SAS approval and portal,
   and a relay-only pairing/portal run with direct listeners disabled.
 
-[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.2
 [0.1.1]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.0

@@ -9,6 +9,15 @@
 
 ## Unreleased
 
+## 0.1.2 - 2026-11-12
+
+### 修复（Fixed）
+
+- 侧边栏远程镜像在选中远程主机期间每 5 秒重新请求该设备的工作区列表，running /
+  awaiting / unread 会话状态会跟随 daemon 更新，不再停在首次拉取的快照上。
+- 运行中的远程会话会显示与原生树一致的小转圈指示（带 `Running` tooltip 与可访问
+  标签），克隆原生行和回退行都覆盖；此前运行中的会话没有实时指示。
+
 ## 0.1.1 - 2026-11-12
 
 ### 新增（Added）
@@ -245,6 +254,7 @@
 - Transport 套件覆盖直连往返、限制和 Origin 检查，以及针对真实 relay 二进制和 mock relay 的 paseo-relay v1/v2 行为。
 - 端到端套件使用真实 `dsh web` 实例：插件加载与 client bundle 出现在启动图中、两台设备通过 SAS 批准和 portal 完成直连配对，以及在关闭直连监听的情况下完成仅中继的配对/portal 运行。
 
-[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.2
 [0.1.1]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.0

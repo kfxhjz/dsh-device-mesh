@@ -79,7 +79,7 @@ step; a single failed “remote prompt/approval” item blocks the release.
 - [ ] `npm pack` tarball installed into a throwaway `DSH_HOME` and booted once:
 
   ```sh
-  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.1.1.tgz
+  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.1.2.tgz
   DSH_HOME=... dsh web --no-open --port 0
   ```
 

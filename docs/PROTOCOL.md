@@ -1,7 +1,7 @@
 # DSH Device Mesh Wire Protocol v1
 [简体中文](zh/PROTOCOL.zh.md) | English
 
-Status: **stable for wire protocol v1** (plugin `0.1.1`). This document is normative;
+Status: **stable for wire protocol v1** (plugin `0.1.2`). This document is normative;
 `src/shared/protocol.ts` is the executable form of the contract.
 
 ## Contents

@@ -1,7 +1,7 @@
 # DSH Device Mesh — Architecture and Security Design
 [简体中文](zh/DESIGN.zh.md) | English
 
-Status: **developer preview** (plugin `0.1.1`, targeting DSH `0.2.2-rc.2`). The wire contract is
+Status: **developer preview** (plugin `0.1.2`, targeting DSH `0.2.2-rc.2`). The wire contract is
 normative in [PROTOCOL.md](PROTOCOL.md); this document explains why the system is
 built this way, where its boundaries are, and how it evolves.
 
@@ -350,7 +350,10 @@ into the native tree without replacing that tree.
   status. Selecting a remote host hides the native browser (`dm-remote-mode`)
   and renders a **read-only remote mirror** in the same region: host name,
   status, refresh/manage/open-control actions, and that host's workspaces and
-  sessions; clicking one opens the device portal. Loading, empty, offline,
+  sessions; clicking one opens the device portal. While a remote host stays
+  selected, the mirror re-requests that device's workspace listing every 5 s so
+  running / awaiting / unread state tracks the daemon; running sessions show the
+  same spinner as the native tree. Loading, empty, offline,
   connecting and error states are explicit, and the native list returns
   immediately when this host is selected again. Remote rows never masquerade as
   local. **Add host** mirrors Paseo's flow: direct connection, paste pairing
