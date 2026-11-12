@@ -229,7 +229,7 @@ If you prefer a single artifact, pack the built directory and install that:
 
 ```sh
 npm pack
-dsh plugin --profile desktop add ./dsh-device-mesh-0.0.1.tgz
+dsh plugin --profile desktop add ./dsh-device-mesh-<version>.tgz
 ```
 
 The same `add` command accepts a local directory, a `.tgz`, an npm package name

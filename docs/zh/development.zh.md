@@ -313,7 +313,7 @@ Android / iOS / 鸿蒙的原生外壳是另外的工作。深链是尽力而为�
 | Transport | `npm run test:transport` | 直连 listener/client、Origin 拒绝、上限、针对 mock 与真实 relay 的 relay v1/v2。 |
 | Host | `npm run test:host` | Store 原子性/恢复与身份密钥对校验、配对签名/TTL/重放、broker（含 relay 票据开关与待批准请求取消）、工作区映射与 64 KiB 列表预算、portal controller/daemon、本地 Web API。 |
 | Client | `npm test` | 覆盖 client store、normalizers、i18n 字典、QR 与 deep-link helper 的直接单测，sidebar host bar/switcher 的 happy-dom 测试，以及 bundle 是否注册预期 slot、是否没有 host-only import 的静态检查。 |
-| 覆盖率 | `npm run test:coverage` | 同一套测试，统计 `src/**/*.ts`。Node 26 上用 `--test-coverage-include-all` 计入从未加载的文件，并强制行/分支/函数门槛 80/72/77；Node 24 回退到已加载文件门槛（89/72/77），CI 在 Ubuntu 上同时运行两种模式。`src/client/index.tsx` 这个 bundle 入口不在统计范围内：它的注册契约由 bundle 测试覆盖，且 Node 不会计入从未加载的 `.tsx` 文件。 |
+| 覆盖率 | `npm run test:coverage` | 同一套测试，统计 `src/**/*.ts`。Node 26 上用 `--test-coverage-include-all` 计入从未加载的文件，并强制行/分支/函数门槛 80/72/77；Node 24 回退到已加载文件门槛（89/72/77），CI 在 Ubuntu 上同时运行两种模式。`src/client/index.tsx` 这个 bundle 入口刻意不在统计范围内（include glob 只匹配 `.ts`）；它的接线契约由 bundle 测试覆盖。 |
 | 端到端 | `npm run test:e2e` | 两个隔离的 `dsh web` 实例：插件加载与本地 API；直连配对、SAS 批准、工作区列表与 portal；仅 relay 的配对与 portal；portal WebSocket 文本帧。 |
 | 浏览器 UI | `npm run test:ui`（包含在 `test:e2e` 中） | 无头 Chrome 打开 portal 并启动被控端真实 DSH UI，包括其要求 text 帧的 Remote stream WebSocket；无 Chrome 时 skip。 |
 

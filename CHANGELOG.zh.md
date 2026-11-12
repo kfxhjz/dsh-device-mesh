@@ -20,8 +20,8 @@
 - `npm run test:coverage` 强制源码行/分支/函数覆盖率门槛（80/72/77），并已纳入
   `npm run release:check`。Node 26 使用 `--test-coverage-include-all`；Node 24 回退到
   已加载文件门槛（89/72/77），CI 同时运行两种模式。统计范围是 `src/**/*.ts`；
-  `src/client/index.tsx` 这个 bundle 入口不在范围内，因为它的注册契约由 bundle 测试
-  覆盖，且 Node 不会计入从未加载的 `.tsx` 文件。
+  `src/client/index.tsx` 这个 bundle 入口刻意不在范围内，因为它负责 client 插件的
+  接线，契约由 bundle 测试覆盖。
 - 针对 Noise 握手解析、channel/session 帧解析和 WebSocket 消息 envelope 的确定性
   fuzz 测试，以及由 `DSH_MESH_SOAK=1` 控制的短时 soak 套件（普通运行会 skip）。
 
@@ -45,6 +45,8 @@
 
 ### 修复（Fixed）
 
+- relay E2E job 的 cargo 缓存按实际 Rust 版本做 key，并升级到 `actions/cache@v6`，
+  工具链升级不会复用陈旧的构建产物。
 - 发布工作流在早期的 tag 校验阶段就检查 `CHANGELOG.md` 是否存在对应版本小节，缺失或未
   改名时会在构建前失败，而不是打包之后才失败。
 - sidebar host 的 DOM 测试用 `finally` 清理挂载，断言失败时不会残留轮询 interval 和 store

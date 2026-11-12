@@ -163,7 +163,7 @@ dsh web --no-open
 
 ```sh
 npm pack
-dsh plugin --profile desktop add ./dsh-device-mesh-0.1.0.tgz
+dsh plugin --profile desktop add ./dsh-device-mesh-<version>.tgz
 ```
 
 同一个 `add` 命令也接受本地目录、`.tgz`、npm 包名或 `link:` 规格。相对路径以运行命令时的目录为基准。

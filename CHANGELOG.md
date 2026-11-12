@@ -23,9 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (80/72/77) and is part of `npm run release:check`. Node 26 uses
   `--test-coverage-include-all`; Node 24 falls back to loaded-file thresholds
   (89/72/77), and CI runs both modes. The measured set is `src/**/*.ts`; the
-  `src/client/index.tsx` bundle entry is out of scope because its registration
-  contract is covered by the bundle test and Node does not include never-loaded
-  `.tsx` files.
+  `src/client/index.tsx` bundle entry is deliberately out of scope because it
+  wires the client plugin and its contract is covered by the bundle test.
 - Deterministic protocol fuzz tests for Noise handshake parsing, channel/session
   frame parsing and WebSocket-message envelopes, plus a short soak suite gated by
   `DSH_MESH_SOAK=1` (skipped in normal runs).
@@ -53,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The relay E2E job keys its cargo cache by the recorded Rust version and uses
+  `actions/cache@v6`, so a toolchain upgrade cannot reuse stale build artifacts.
 - The release workflow verifies the `CHANGELOG.md` version section during the
   early tag check, so a missing or unrenamed section fails before the build
   instead of after packing.
