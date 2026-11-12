@@ -61,6 +61,7 @@
     "test:ui": "node --import tsx --test test/e2e/portal-ui.test.ts",
     "release:check": "node scripts/release-check.mjs",
     "lint": "oxlint src test scripts",
+    "check:scripts": "node --check scripts/build.mjs && node --check scripts/release-check.mjs && node --check scripts/release-notes.mjs && node --check scripts/coverage.mjs",
     "lint:fix": "oxlint --fix src test scripts"
   },
   "dependencies": {

@@ -38,6 +38,7 @@ npm test
 | `npm run test:coverage` | 同一套测试，外加源码行/分支/函数覆盖率门槛。 |
 | `npm run test:core` / `test:transport` / `test:host` | 每次只跑一个套件。 |
 | `npm run lint` | 使用与 DSH 上游同族的 Oxlint 检查 `src`、`test`、`scripts`，包含 DSH 的 `@stylistic` 格式规则以及 import 卫生（顶层 `import type`、不重复导入同一模块）。 |
+| `npm run check:scripts` | 对 `scripts/` 执行 `node --check`（Oxlint 忽略 `.mjs`，这能在 workflow 运行前发现语法错误）。 |
 | `npm run test:e2e` | 启动真实的 `dsh web` 实例；见下文。 |
 
 Oxlint `@stylistic` 插件加载的开发期 ESLint 依赖链，通过 `package.json` 的

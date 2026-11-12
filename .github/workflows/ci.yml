@@ -44,6 +44,7 @@ jobs:
           grep -q 'lib/host/index.js' /tmp/pack.log
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm run check:scripts
       - run: npm test
       - name: Coverage gate
         # Node 26 runs the full include-all gate; Node 24 exercises the
@@ -80,6 +81,7 @@ jobs:
           grep -q 'lib/host/index.js' /tmp/pack.log
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm run check:scripts
       - run: npm test
 
   e2e:

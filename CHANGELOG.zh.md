@@ -47,6 +47,8 @@
 
 - relay E2E job 的 cargo 缓存按实际 Rust 版本做 key，并升级到 `actions/cache@v6`，
   工具链升级不会复用陈旧的构建产物。
+- `npm run check:scripts` 对构建/发布脚本执行 `node --check`，并纳入 CI 与
+  `npm run release:check`；Oxlint 忽略 `.mjs`，这能在 workflow 执行前发现脚本语法错误。
 - 发布工作流在早期的 tag 校验阶段就检查 `CHANGELOG.md` 是否存在对应版本小节，缺失或未
   改名时会在构建前失败，而不是打包之后才失败。
 - sidebar host 的 DOM 测试用 `finally` 清理挂载，断言失败时不会残留轮询 interval 和 store

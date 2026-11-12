@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The relay E2E job keys its cargo cache by the recorded Rust version and uses
   `actions/cache@v6`, so a toolchain upgrade cannot reuse stale build artifacts.
+- `npm run check:scripts` runs `node --check` over the build/release scripts and
+  is part of CI and `npm run release:check`; Oxlint ignores `.mjs`, so this
+  catches a script syntax error before a workflow reaches it.
 - The release workflow verifies the `CHANGELOG.md` version section during the
   early tag check, so a missing or unrenamed section fails before the build
   instead of after packing.

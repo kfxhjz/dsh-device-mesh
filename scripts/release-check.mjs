@@ -10,6 +10,7 @@ const steps = [
   ['build', ['run', 'build'], 'produces lib/host/index.js and client.js'],
   ['typecheck', ['run', 'typecheck'], 'Host and test TypeScript'],
   ['lint', ['run', 'lint'], 'oxlint over src, test and scripts'],
+  ['script syntax', ['run', 'check:scripts'], 'node --check over the build/release scripts'],
   ['unit tests', ['test'], 'unit, host and client suites'],
   ['coverage', ['run', 'test:coverage'], 'source line/branch/function coverage thresholds'],
   ['end-to-end', ['run', 'test:e2e'], 'DSH CLI required; relay/browser cases may skip'],

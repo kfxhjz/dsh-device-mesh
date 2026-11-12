@@ -42,6 +42,7 @@ npm test
 | `npm run test:coverage` | The same suites with source line/branch/function coverage thresholds. |
 | `npm run test:core` / `test:transport` / `test:host` | One suite at a time. |
 | `npm run lint` | Oxlint (the same linter family as DSH upstream) over `src`, `test` and `scripts`, including the DSH `@stylistic` formatting rules and import hygiene (`import type` at top level, no duplicate module imports). |
+| `npm run check:scripts` | `node --check` over `scripts/` (Oxlint ignores `.mjs` files, so this catches syntax errors before a workflow runs). |
 | `npm run test:e2e` | Boots real `dsh web` instances; see below. |
 
 The development-only ESLint chain loaded by the Oxlint `@stylistic` plugin is

@@ -8,10 +8,11 @@
  * have that flag, so it falls back to loaded-file thresholds; CI runs both
  * (Node 26 full gate, Node 24 fallback).
  *
- * The measured set is `src/**/*.ts`. `src/client/index.tsx` is deliberately out
+ * The measured set is the `.ts` sources under `src/`. `src/client/index.tsx`
+ * is deliberately out
  * of scope: it wires the client plugin (panel, sidebar entries, styles) and its
  * contract is covered by the bundle test in `test/client/static.test.ts`; the
- * include glob above is `.ts`-only. Keep the include list and this comment in sync.
+ * include glob above is `.ts`-only. Keep it and this comment in sync.
  */
 import { spawnSync } from 'node:child_process'
 
