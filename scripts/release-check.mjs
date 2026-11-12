@@ -11,6 +11,7 @@ const steps = [
   ['typecheck', ['run', 'typecheck'], 'Host and test TypeScript'],
   ['lint', ['run', 'lint'], 'oxlint over src, test and scripts'],
   ['unit tests', ['test'], 'unit, host and client suites'],
+  ['coverage', ['run', 'test:coverage'], 'source line/branch/function coverage thresholds'],
   ['end-to-end', ['run', 'test:e2e'], 'DSH CLI required; relay/browser cases may skip'],
   ['package', ['pack', '--dry-run'], 'must list 11 files; no tests or secrets'],
 ]

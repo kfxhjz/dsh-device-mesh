@@ -35,6 +35,9 @@ async function modeOf(path: string): Promise<number> {
   return info.mode & 0o777
 }
 
+/** Windows ignores POSIX permission bits, so 0600 assertions only run on POSIX. */
+const POSIX = process.platform !== 'win32'
+
 describe('store: identity and defaults', () => {
   it('creates a 0600 identity whose deviceId derives from its signing key', async () => {
     const temp = await makeTempDir()
@@ -44,7 +47,7 @@ describe('store: identity and defaults', () => {
       assert.equal(identity.version, 1)
       assert.match(identity.deviceId, /^dm_[a-z2-7]{22}$/u)
       assert.equal(deriveDeviceId(identity.signPk), identity.deviceId)
-      assert.equal((await modeOf(join(temp.dir, 'identity.json'))), 0o600)
+      if (POSIX) assert.equal((await modeOf(join(temp.dir, 'identity.json'))), 0o600)
       // Both key pairs are real and usable.
       const signature = signEd25519(identity.signSk, new Uint8Array([1, 2, 3]))
       assert.equal(verifyEd25519(identity.signPk, new Uint8Array([1, 2, 3]), signature), true)
@@ -225,7 +228,7 @@ describe('store: corruption recovery and audit', () => {
       const parsed = JSON.parse(raw.trim().split('\n').at(-1) ?? '{}') as Record<string, unknown>
       assert.equal(typeof parsed.at, 'string')
       assert.equal(Object.hasOwn(parsed, 'token'), false)
-      assert.equal((await modeOf(join(temp.dir, 'audit.jsonl'))), 0o600)
+      if (POSIX) assert.equal((await modeOf(join(temp.dir, 'audit.jsonl'))), 0o600)
     } finally {
       await temp.cleanup()
     }
@@ -256,7 +259,7 @@ describe('store: helpers', () => {
       assert.equal(await readFile(target, 'utf8'), 'one')
       await atomicWriteFile(target, 'two', 0o600)
       assert.equal(await readFile(target, 'utf8'), 'two')
-      assert.equal(await modeOf(target), 0o600)
+      if (POSIX) assert.equal(await modeOf(target), 0o600)
     } finally {
       await temp.cleanup()
     }
