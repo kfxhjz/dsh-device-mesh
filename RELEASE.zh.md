@@ -24,6 +24,7 @@ npm pack --dry-run     # 必须列出 11 个文件（lib/、client.js、cordis.p
 | `npm run build` | 产出 `lib/host/index.js` 与 `client.js` |
 | `npm run typecheck` | 无错误 |
 | `npm test` | 单元/host/client 测试全绿 |
+| `npm run test:coverage` | 源码行/分支/函数覆盖率门槛通过（Node 26 完整门槛，Node 24 回退门槛） |
 | `npm run test:e2e` | 插件加载、直连配对+portal、portal WebSocket 文本帧、真实 paseo-relay、真实浏览器远端 UI；无 Chrome 时浏览器用例 skip |
 | `npm pack --dry-run` | 11 个文件，不含测试/文档/`node_modules`/密钥 |
 | `git status --short` | 为空 |
@@ -73,7 +74,7 @@ E2E 可选环境变量：
 - [ ] `npm pack` 产物装进临时 `DSH_HOME` 并成功启动一次：
 
   ```sh
-  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.1.0.tgz
+  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.1.1.tgz
   DSH_HOME=... dsh web --no-open --port 0
   ```
 

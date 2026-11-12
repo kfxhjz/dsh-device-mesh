@@ -1,7 +1,7 @@
 # Development and Maintenance Guide
 [简体中文](zh/development.zh.md) | English
 
-Status: applies to plugin `0.1.0` against DSH `0.2.2-rc.2`. This guide is for people who build, extend, review
+Status: applies to plugin `0.1.1` against DSH `0.2.2-rc.2`. This guide is for people who build, extend, review
 or release the plugin. It covers the repository layout, DSH packaging and client-bundle contracts, the local
 loop, host and UI integration seams, testing, debugging and releases.
 
@@ -328,7 +328,7 @@ portal, DSH wiring or the client boot graph.
 | Transport | `npm run test:transport` | Direct listener/client, Origin rejection, limits, relay v1/v2 against a mock and a real relay. |
 | Host | `npm run test:host` | Store atomicity/recovery and identity key-pair validation, pairing signatures/TTL/replay, broker (including relay-ticket gating and pending-request cancellation), workspace mapping plus the 64 KiB listing budget, portal controller/daemon, local Web API. |
 | Client | `npm test` | Direct unit tests for the client store, normalizers, i18n dictionaries, QR and deep-link helpers, a happy-dom test for the sidebar host bar/switcher, plus static checks that the bundle registers the expected slots and has no host-only imports. |
-| Coverage | `npm run test:coverage` | The same suites over `src/`. On Node 26 `--test-coverage-include-all` counts never-loaded files and enforces 82/73/78 line/branch/function thresholds; Node 24 falls back to loaded-file thresholds (89/72/77). CI runs the full gate on Node 26. |
+| Coverage | `npm run test:coverage` | The same suites over `src/**/*.ts`. On Node 26 `--test-coverage-include-all` counts never-loaded files and enforces 80/72/77 line/branch/function thresholds; Node 24 falls back to loaded-file thresholds (89/72/77), and CI runs both modes on Ubuntu. The `src/client/index.tsx` bundle entry is out of scope: its registration contract is covered by the bundle test, and Node does not include never-loaded `.tsx` files. |
 | End-to-end | `npm run test:e2e` | Two isolated `dsh web` instances: plugin load and local API; direct pairing, SAS approval, workspace list and portal; relay-only pairing and portal; portal WebSocket text frames. |
 | Browser UI | `npm run test:ui` (part of `test:e2e`) | Headless Chrome opens the portal and boots the daemon's real DSH UI, including its text-frame Remote stream WebSocket; skips without Chrome. |
 
@@ -339,11 +339,13 @@ plain checkout.
 Use `npm run release:check` before tagging: it runs the build, typecheck, unit and E2E suites plus `npm pack --dry-run`,
 matching the automated half of [`RELEASE.md`](../RELEASE.md).
 
-CI runs `npm ci`, `npm run build`, `npm run typecheck`, `npm run lint` and `npm test` on Ubuntu, macOS and
-Windows for Node.js 24 and 26, plus the full `npm run test:coverage` gate on Ubuntu/Node 26. It then runs
-`npm run test:e2e` on Ubuntu with `DSH_CLI=dsh` and DSH `0.2.2-rc.2` installed globally. A separate `e2e-relay` job builds the pinned
-paseo-relay `v0.1.2` binary and runs `test/transport/relay-e2e.test.ts` plus `test/e2e/relay.test.ts` against it.
-A nightly schedule repeats the full CI run.
+CI runs `npm ci`, `npm run build`, `npm run typecheck`, `npm run lint` and `npm test` on Ubuntu and macOS
+for Node.js 24 and 26, and the same unit gate on Windows for Node.js 24 in a separate job (a Windows-only
+failure does not gate the E2E jobs). Coverage runs on Ubuntu for both Node versions: the full include-all gate
+on Node 26 and the loaded-file fallback on Node 24. Both E2E jobs and the release gate run on Node 26;
+`npm run test:e2e` uses `DSH_CLI=dsh` with DSH `0.2.2-rc.2` installed globally. A separate `e2e-relay` job
+builds the pinned paseo-relay `v0.1.2` binary and runs `test/transport/relay-e2e.test.ts` plus
+`test/e2e/relay.test.ts` against it. The nightly schedule repeats the full run and also executes the soak suite.
 
 The release workflow (`.github/workflows/release.yml`) runs the same gate through `npm run release:check`,
 verifies that the `v*` tag matches `package.json`, writes `SHA256SUMS`, and publishes the tarball with release
@@ -378,8 +380,10 @@ links and private paths from logs and screenshots.
 `client.js` and `lib/`; `prepublishOnly` additionally runs `npm test`. A release
 starts from a clean checkout, not a working tree:
 
-1. Run `npm ci`, `npm run typecheck`, `npm test` and `npm run test:e2e` (with a
-   DSH CLI, plus a real paseo-relay if relay behavior changed).
+1. Run `npm ci`, `npm run typecheck`, `npm run lint`, `npm test`,
+   `npm run test:coverage` and `npm run test:e2e` (with a DSH CLI, plus a real
+   paseo-relay if relay behavior changed); `npm run release:check` runs the same
+   automated gate.
 2. Run `npm run build`; inspect `lib/host/index.js` and confirm `client.js`
    starts with the generated `__ModuleLoader__.load` banner.
 3. Run `npm pack --dry-run`; the tarball must contain the 11 expected files:

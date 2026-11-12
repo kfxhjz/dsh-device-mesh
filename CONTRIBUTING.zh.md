@@ -40,6 +40,10 @@ npm test
 | `npm run lint` | 使用与 DSH 上游同族的 Oxlint 检查 `src`、`test`、`scripts`，包含 DSH 的 `@stylistic` 格式规则以及 import 卫生（顶层 `import type`、不重复导入同一模块）。 |
 | `npm run test:e2e` | 启动真实的 `dsh web` 实例；见下文。 |
 
+Oxlint `@stylistic` 插件加载的开发期 ESLint 依赖链，通过 `package.json` 的
+`overrides` 固定为 `minimatch` 11.x，因为 ESLint 声明的范围仍带有 glob 拒绝服务公告；
+等 ESLint 发布兼容范围后应移除该 override。
+
 要在真实的 DSH profile 中试用改动，先把当前 checkout 构建并安装到一个一次性 profile，然后重启 DSH：
 
 ```sh

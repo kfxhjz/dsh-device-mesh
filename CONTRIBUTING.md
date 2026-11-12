@@ -44,6 +44,11 @@ npm test
 | `npm run lint` | Oxlint (the same linter family as DSH upstream) over `src`, `test` and `scripts`, including the DSH `@stylistic` formatting rules and import hygiene (`import type` at top level, no duplicate module imports). |
 | `npm run test:e2e` | Boots real `dsh web` instances; see below. |
 
+The development-only ESLint chain loaded by the Oxlint `@stylistic` plugin is
+pinned through the `overrides` entry in `package.json` (`minimatch` 11.x) because
+the range ESLint declares still carries a globbing denial-of-service advisory.
+Revisit the override when ESLint ships a compatible range.
+
 To try a change in a real DSH profile, build and reinstall the checkout into a
 throw-away profile, then restart DSH:
 

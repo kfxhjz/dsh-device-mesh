@@ -9,14 +9,19 @@
 
 ## Unreleased
 
+## 0.1.1 - 2026-11-12
+
 ### 新增（Added）
 
 - client 半边的直接单测：API normalizers、host 选择 store、中英文词典、QR 编码、
   deep-link 处理，以及 sidebar host bar/switcher 的 happy-dom 测试。按
   `--test-coverage-include-all` 统计，源码整体行覆盖率从约 69% 提升到约 84%，
   client 半边不再只靠 bundle 静态断言覆盖。
-- `npm run test:coverage` 强制源码行/分支/函数覆盖率门槛（82/73/78），并已纳入
-  `npm run release:check`。
+- `npm run test:coverage` 强制源码行/分支/函数覆盖率门槛（80/72/77），并已纳入
+  `npm run release:check`。Node 26 使用 `--test-coverage-include-all`；Node 24 回退到
+  已加载文件门槛（89/72/77），CI 同时运行两种模式。统计范围是 `src/**/*.ts`；
+  `src/client/index.tsx` 这个 bundle 入口不在范围内，因为它的注册契约由 bundle 测试
+  覆盖，且 Node 不会计入从未加载的 `.tsx` 文件。
 - 针对 Noise 握手解析、channel/session 帧解析和 WebSocket 消息 envelope 的确定性
   fuzz 测试，以及由 `DSH_MESH_SOAK=1` 控制的短时 soak 套件（普通运行会 skip）。
 
@@ -30,10 +35,22 @@
   `softprops/action-gh-release@v3`。
 - 新增 npm `overrides`，把 `minimatch` 固定到已修复的 11.x 分支，Oxlint
   `@stylistic` 插件加载的开发期 ESLint 依赖链不再报告 glob 拒绝服务公告。
-- CI 覆盖 Ubuntu、macOS 与 Windows（Node.js 24/26；Windows 跑 Node 24），新增覆盖率
-  门禁、独立的真实 paseo-relay E2E job（构建固定 `v0.1.2` 二进制），以及夜间定时运行。
-- 仓库卫生：新增 `.gitattributes`（LF 行尾）与 `.nvmrc`（Node 24）；CHANGELOG 增加
+- CI 现在是 Ubuntu/macOS 上的 Node.js 24 和 26，加上独立的 Windows/Node 24 job，因此
+  Windows 单独失败不再阻塞 E2E。覆盖率在 Ubuntu 上同时覆盖 Node 24（已加载文件回退门槛）
+  与 Node 26（完整 include-all 门槛）；两个 E2E job 与发布门禁都使用 Node 26。新增独立的
+  真实 paseo-relay E2E job（构建固定 `v0.1.2` 二进制），夜间定时任务还会运行 soak 套件；
+  定时任务使用独立的 concurrency group，不会与 push/PR 运行互相取消。
+- 仓库卫生：新增 `.gitattributes`（LF 行尾）与 `.nvmrc`（Node 26）；CHANGELOG 增加
   各版本的链接。
+
+### 修复（Fixed）
+
+- 发布工作流在早期的 tag 校验阶段就检查 `CHANGELOG.md` 是否存在对应版本小节，缺失或未
+  改名时会在构建前失败，而不是打包之后才失败。
+- sidebar host 的 DOM 测试用 `finally` 清理挂载，断言失败时不会残留轮询 interval 和 store
+  订阅。
+- 修正开发指南与 changelog 中的 CI/Node 与 `.nvmrc` 描述（Windows 仅 Node 24；覆盖率在
+  Node 24 和 26 上运行；两个 E2E job 与发布门禁使用 Node 26）。
 
 ## 0.1.0 - 2026-11-12
 
@@ -224,5 +241,6 @@
 - Transport 套件覆盖直连往返、限制和 Origin 检查，以及针对真实 relay 二进制和 mock relay 的 paseo-relay v1/v2 行为。
 - 端到端套件使用真实 `dsh web` 实例：插件加载与 client bundle 出现在启动图中、两台设备通过 SAS 批准和 portal 完成直连配对，以及在关闭直连监听的情况下完成仅中继的配对/portal 运行。
 
-[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.0

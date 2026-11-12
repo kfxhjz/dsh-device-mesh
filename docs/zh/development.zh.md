@@ -1,7 +1,7 @@
 # 开发与维护指南
 [English](../development.md) | 简体中文
 
-状态：适用于插件 `0.1.0`，面向 DSH `0.2.2-rc.2`。本指南面向构建、扩展、评审或发布该插件的人，涵盖仓库布局、DSH 打包与 client bundle 契约、本地开发回路、host 与 UI 集成接缝、测试、调试与发布。
+状态：适用于插件 `0.1.1`，面向 DSH `0.2.2-rc.2`。本指南面向构建、扩展、评审或发布该插件的人，涵盖仓库布局、DSH 打包与 client bundle 契约、本地开发回路、host 与 UI 集成接缝、测试、调试与发布。
 
 线路契约以[协议文档](PROTOCOL.zh.md)为规范；架构、安全理由与路线图见[设计文档](DESIGN.zh.md)。本指南说明如何在这份代码上工作，并链接到那些文档，而不是复述它们。
 
@@ -313,7 +313,7 @@ Android / iOS / 鸿蒙的原生外壳是另外的工作。深链是尽力而为�
 | Transport | `npm run test:transport` | 直连 listener/client、Origin 拒绝、上限、针对 mock 与真实 relay 的 relay v1/v2。 |
 | Host | `npm run test:host` | Store 原子性/恢复与身份密钥对校验、配对签名/TTL/重放、broker（含 relay 票据开关与待批准请求取消）、工作区映射与 64 KiB 列表预算、portal controller/daemon、本地 Web API。 |
 | Client | `npm test` | 覆盖 client store、normalizers、i18n 字典、QR 与 deep-link helper 的直接单测，sidebar host bar/switcher 的 happy-dom 测试，以及 bundle 是否注册预期 slot、是否没有 host-only import 的静态检查。 |
-| 覆盖率 | `npm run test:coverage` | 同一套测试，统计 `src/`。Node 26 上用 `--test-coverage-include-all` 计入从未加载的文件，并强制行/分支/函数门槛 82/73/78；Node 24 回退到已加载文件门槛（89/72/77）。CI 在 Node 26 上运行完整门槛。 |
+| 覆盖率 | `npm run test:coverage` | 同一套测试，统计 `src/**/*.ts`。Node 26 上用 `--test-coverage-include-all` 计入从未加载的文件，并强制行/分支/函数门槛 80/72/77；Node 24 回退到已加载文件门槛（89/72/77），CI 在 Ubuntu 上同时运行两种模式。`src/client/index.tsx` 这个 bundle 入口不在统计范围内：它的注册契约由 bundle 测试覆盖，且 Node 不会计入从未加载的 `.tsx` 文件。 |
 | 端到端 | `npm run test:e2e` | 两个隔离的 `dsh web` 实例：插件加载与本地 API；直连配对、SAS 批准、工作区列表与 portal；仅 relay 的配对与 portal；portal WebSocket 文本帧。 |
 | 浏览器 UI | `npm run test:ui`（包含在 `test:e2e` 中） | 无头 Chrome 打开 portal 并启动被控端真实 DSH UI，包括其要求 text 帧的 Remote stream WebSocket；无 Chrome 时 skip。 |
 
@@ -324,12 +324,13 @@ Android / iOS / 鸿蒙的原生外壳是另外的工作。深链是尽力而为�
 打 tag 前运行 `npm run release:check`：执行构建、typecheck、单元与 E2E、`npm pack --dry-run`，
 对应 [`RELEASE.zh.md`](../../RELEASE.zh.md) 的自动化门槛。
 
-CI 在 Ubuntu、macOS 与 Windows 上以 Node.js 24 和 26 运行 `npm ci`、`npm run build`、
-`npm run typecheck`、`npm run lint`、`npm test`，并在 Ubuntu/Node 24 上运行
-`npm run test:coverage`（Ubuntu/Node 26）；随后在 Ubuntu 上以全局安装的 DSH `0.2.2-rc.2` 和 `DSH_CLI=dsh`
-运行 `npm run test:e2e`。另有独立的 `e2e-relay` job 会构建固定版本的 paseo-relay `v0.1.2`
-二进制，并针对它运行 `test/transport/relay-e2e.test.ts` 与 `test/e2e/relay.test.ts`。
-夜间定时任务会完整重跑一次 CI。
+CI 在 Ubuntu、macOS 上以 Node.js 24 和 26 运行 `npm ci`、`npm run build`、`npm run typecheck`、
+`npm run lint`、`npm test`，并把同一套单元门禁在 Windows/Node 24 上作为独立 job 运行（Windows
+单独失败不会阻塞 E2E）。覆盖率在 Ubuntu 上同时覆盖 Node 24（已加载文件回退门槛）与 Node 26
+（完整 include-all 门槛）。两个 E2E job 与发布门禁都使用 Node 26；`npm run test:e2e` 以全局安装的
+DSH `0.2.2-rc.2` 和 `DSH_CLI=dsh` 运行。另有独立的 `e2e-relay` job 会构建固定版本的 paseo-relay
+`v0.1.2` 二进制，并针对它运行 `test/transport/relay-e2e.test.ts` 与 `test/e2e/relay.test.ts`。
+夜间定时任务会完整重跑一次 CI，并额外运行 soak 套件。
 
 发布工作流（`.github/workflows/release.yml`）通过 `npm run release:check` 运行同一套门槛，校验 `v*`
 tag 与 `package.json` 版本一致，生成 `SHA256SUMS`，并用 `scripts/release-notes.mjs` 从 `CHANGELOG.md`
@@ -363,8 +364,9 @@ tag 与 `package.json` 版本一致，生成 `SHA256SUMS`，并用 `scripts/rele
 `client.js` 与 `lib/`；`prepublishOnly` 还会运行 `npm test`。发布从干净的 checkout
 开始，而不是工作树：
 
-1. 运行 `npm ci`、`npm run typecheck`、`npm test` 与 `npm run test:e2e`（需要
-   DSH CLI；如果 relay 行为有变化，还需要真实 paseo-relay）。
+1. 运行 `npm ci`、`npm run typecheck`、`npm run lint`、`npm test`、
+   `npm run test:coverage` 与 `npm run test:e2e`（需要 DSH CLI；如果 relay 行为有
+   变化，还需要真实 paseo-relay）；`npm run release:check` 会执行同一套自动化门槛。
 2. 运行 `npm run build`；检查 `lib/host/index.js`，并确认 `client.js` 以生成的
    `__ModuleLoader__.load` banner 开头。
 3. 运行 `npm pack --dry-run`；tarball 必须包含预期的 11 个文件：

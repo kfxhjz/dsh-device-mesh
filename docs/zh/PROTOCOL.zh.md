@@ -2,7 +2,7 @@
 
 [English](../PROTOCOL.md) | 简体中文
 
-状态：**wire protocol v1 稳定版**（插件 `0.1.0`）。本文是实现与安全评审的规范依据，
+状态：**wire protocol v1 稳定版**（插件 `0.1.1`）。本文是实现与安全评审的规范依据，
 `src/shared/protocol.ts` 是这份契约的可执行形式。
 
 ## 目录

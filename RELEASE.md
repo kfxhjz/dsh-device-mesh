@@ -25,6 +25,7 @@ npm pack --dry-run     # must list 11 files (lib/, client.js, cordis.patch.yml, 
 | `npm run build` | `lib/host/index.js` and `client.js` produced |
 | `npm run typecheck` | no errors |
 | `npm test` | all unit/host/client tests pass |
+| `npm run test:coverage` | source line/branch/function thresholds pass (full gate on Node 26, fallback on Node 24) |
 | `npm run test:e2e` | plugin load, direct pairing + portal, portal WebSocket text frames, real paseo-relay path, real-browser remote UI; browser test skips without Chrome |
 | `npm pack --dry-run` | 11 files, no tests/docs/`node_modules`/secrets |
 | `git status --short` | empty |
@@ -78,7 +79,7 @@ step; a single failed “remote prompt/approval” item blocks the release.
 - [ ] `npm pack` tarball installed into a throwaway `DSH_HOME` and booted once:
 
   ```sh
-  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.1.0.tgz
+  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.1.1.tgz
   DSH_HOME=... dsh web --no-open --port 0
   ```
 
