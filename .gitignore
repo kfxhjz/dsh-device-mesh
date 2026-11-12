@@ -1,0 +1,13 @@
+node_modules/
+lib/
+client.js
+*.tgz
+.dsh-test/
+.DS_Store
+/tmp/
+/target/
+.npm-cache/
+/paseo-relay/
+.build/
+.test/
+.pnpm-store/

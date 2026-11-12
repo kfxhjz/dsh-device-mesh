@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Device Mesh",
+    "description": "Pair your DeepSeek Harness devices and control them remotely over LAN/Tailscale or a paseo-relay public channel."
+  },
+  "panel": "Devices"
+}

@@ -1,0 +1,10 @@
+# dsh-device-mesh — profile layer.
+#
+# One bare-package Loader row is all a bundle needs: the Host half is this
+# package's main entry, and the browser half is discovered through the same
+# package.json (`dsh.client` + `exports["./client"]`) by DSH's client-modules
+# scanner. Do not add a second row for the client.
+- insert:
+    - id: device-mesh
+      name: dsh-device-mesh
+      config: {}

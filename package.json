@@ -1,0 +1,87 @@
+{
+  "name": "dsh-device-mesh",
+  "version": "0.0.1",
+  "description": "DSH device mesh: pair your DSH devices and control them remotely over LAN/Tailscale or a paseo-relay public channel",
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "lib/",
+    "cordis.patch.yml",
+    "locale/",
+    "icon.svg",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "dsh",
+    "device-mesh",
+    "remote-control",
+    "relay",
+    "noise-protocol"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.2-rc.1 <0.3.0",
+    "node": ">=24.9.0"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:host": "node scripts/build.mjs --host",
+    "build:client": "node scripts/build.mjs --client",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --import tsx --test test/core/*.test.ts test/transport/*.test.ts test/host/*.test.ts test/client/*.test.ts",
+    "test:core": "node --import tsx --test \"test/core/*.test.ts\"",
+    "test:transport": "node --import tsx --test \"test/transport/*.test.ts\"",
+    "test:e2e": "node --import tsx --test --test-concurrency=1 test/e2e/*.test.ts",
+    "test:host": "node --import tsx --test test/host/*.test.ts",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run build && npm test",
+    "test:ui": "node --import tsx --test test/e2e/portal-ui.test.ts",
+    "release:check": "node scripts/release-check.mjs",
+    "lint": "oxlint src test scripts",
+    "lint:fix": "oxlint --fix src test scripts"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^2.4.0",
+    "qrcode-generator": "^2.0.4",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.28.2",
+    "oxlint": "1.81.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "playwright-core": "^1.65.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kfxhjz/dsh-device-mesh.git"
+  },
+  "homepage": "https://github.com/kfxhjz/dsh-device-mesh#readme",
+  "bugs": {
+    "url": "https://github.com/kfxhjz/dsh-device-mesh/issues"
+  },
+  "author": "dsh-device-mesh contributors"
+}

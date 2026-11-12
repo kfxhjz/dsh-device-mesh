@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Verify and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - name: Install the DSH CLI used by the harness
+        run: npm install --global @deepseek-ai/dsh@0.2.2-rc.1
+      - name: Ensure Chrome for the browser E2E
+        env:
+          CHROME_PATH: /usr/bin/google-chrome
+        run: |
+          test -x "$CHROME_PATH" || (sudo apt-get update && sudo apt-get install -y google-chrome-stable)
+      - name: Run end-to-end tests
+        env:
+          DSH_CLI: dsh
+          CHROME_PATH: /usr/bin/google-chrome
+        run: npm run test:e2e
+      - name: Pack the publishable tarball
+        run: npm pack
+      - name: Upload the tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-device-mesh-tarball
+          path: dsh-device-mesh-*.tgz
+          if-no-files-found: error
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dsh-device-mesh-*.tgz
+          generate_release_notes: true

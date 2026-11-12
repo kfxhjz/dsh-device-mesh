@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "设备网格",
+    "description": "配对多台 DeepSeek Harness 设备，在内网/Tailscale 直连或通过 paseo-relay 公网通道远程控制。"
+  },
+  "panel": "远程设备"
+}
