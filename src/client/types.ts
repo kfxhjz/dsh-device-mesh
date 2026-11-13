@@ -66,6 +66,15 @@ export interface ClientContext {
   get?(name: string): unknown
 }
 
+/**
+ * One request to create a blank Session in a Workspace on the remote shell.
+ * The id makes the request idempotent across the URL/iframe and retry paths.
+ */
+export interface RemoteNewSessionRequest {
+  readonly workspaceId: string
+  readonly requestId: string
+}
+
 /** One detected barcode from the experimental `BarcodeDetector` API. */
 export interface DetectedBarcode {
   readonly rawValue?: string

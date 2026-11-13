@@ -369,11 +369,16 @@ into the native tree without replacing that tree.
   immediately when this host is selected again. Remote rows never masquerade as
   local. The mirror carries its own **View options** menu (group by workspace or
   one flat list, order by recent activity or title, hide/show/only archived
-  sessions, persisted per device) and per-session **Archive / Unarchive**
-  through the `session.archive` RPC, which calls the daemon's
-  `workspaceRegistry` so local and remote views agree. **Add host** mirrors
-  Paseo's flow: direct connection, paste pairing link, and remote SSH (marked
-  planned until an SSH transport exists).
+  sessions, persisted per device), a **New session** action on each workspace
+  row, and per-session **Archive / Unarchive** through the `session.archive`
+  RPC, which calls the daemon's `workspaceRegistry` so local and remote views
+  agree. New Session is a navigation request, not a new Mesh RPC: the
+  controller opens the portal with `dm-new-session` plus a request id and the
+  remote copy of the plugin calls the shell's native
+  `uiWorkspace.startSession(workspaceId)`; the URL/sessionStorage path and the
+  retried postMessage path share the request id, so at most one Session is
+  created. **Add host** mirrors Paseo's flow: direct connection, paste pairing
+  link, and remote SSH (marked planned until an SSH transport exists).
 - **Upstream boundary (Phase 2).** The clean final form is a small
   `sidebar.workspace.row.trailing` slot in `ui-workspace` (roughly 30 lines) so a
   plugin can render a device badge on a native workspace row. The plugin would

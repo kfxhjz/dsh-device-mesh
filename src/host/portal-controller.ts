@@ -294,8 +294,28 @@ function sanitizeResponseStatus(status: number): number {
   return Number.isInteger(status) && status >= 100 && status <= 599 ? status : 502
 }
 
+/** One-shot new-Session navigation carried by the portal URL. */
+export interface EmbedNewSession {
+  readonly workspaceId: string
+  readonly requestId: string
+}
+
+/** Read and validate the new-Session query parameters. */
+function newSessionFromUrl(url: URL): EmbedNewSession | undefined {
+  const workspaceId = url.searchParams.get('dm-new-session')
+  const requestId = url.searchParams.get('dm-new-session-request')
+  if (workspaceId === null || requestId === null) return undefined
+  const valid = (value: string): boolean =>
+    value.length > 0 && value.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(value)
+  return valid(workspaceId) && valid(requestId) ? { workspaceId, requestId } : undefined
+}
+
 /** Marker + layout override injected into an embedded remote DSH document. */
-export function injectEmbedShell(html: string, sessionId?: string): string {
+export function injectEmbedShell(
+  html: string,
+  sessionId?: string,
+  newSession?: EmbedNewSession,
+): string {
   const css = [
     "html[data-dm-embed='1'] [class$='_frame']{grid-template-columns:minmax(0,1fr)!important}",
     "html[data-dm-embed='1'] [class$='_centerCol']{grid-column:1!important}",
@@ -305,7 +325,10 @@ export function injectEmbedShell(html: string, sessionId?: string): string {
   const remember = sessionId === undefined || sessionId.length === 0
     ? ''
     : `try{sessionStorage.setItem('dsh-device-mesh:dm-session',${scriptJson(sessionId)})}catch{}`
-  const injection = `<script>document.documentElement.dataset.dmEmbed='1';${remember}</script><style id="dm-embed-shell">${css}</style>`
+  const rememberNew = newSession === undefined
+    ? ''
+    : `try{sessionStorage.setItem('dsh-device-mesh:dm-new-session',${scriptJson(JSON.stringify(newSession))})}catch{}`
+  const injection = `<script>document.documentElement.dataset.dmEmbed='1';${remember}${rememberNew}</script><style id="dm-embed-shell">${css}</style>`
   const index = html.search(/<\/head>/iu)
   return index < 0 ? `${injection}${html}` : `${html.slice(0, index)}${injection}${html.slice(index)}`
 }
@@ -842,6 +865,7 @@ export class PortalController {
           ? Buffer.from(injectEmbedShell(
             Buffer.from(exchange.bytes).toString('utf8'),
             url.searchParams.get('dm-session') ?? undefined,
+            newSessionFromUrl(url),
           ), 'utf8')
           : exchange.bytes
         if (cacheable && status === 200) {

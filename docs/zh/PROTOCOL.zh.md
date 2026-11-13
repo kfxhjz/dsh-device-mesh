@@ -429,6 +429,14 @@ portal iframe 可以携带 `?dm-session=<session-id>&dm-embed=1`。portal 响应
 表面变化，或远端文档的 CSP 禁止内联 script/style 时，布局/深链注入会被跳过，
 用户会落在远端首页并在 UI 内导航。
 
+需要新建会话的父窗口改为携带
+`?dm-new-session=<workspace-id>&dm-new-session-request=<id>`。portal 把
+`{workspaceId, requestId}` 存入 `sessionStorage`；远端插件在就绪后调用 shell 原生的
+`uiWorkspace.startSession(workspaceId)`。已加载的 iframe 被复用时，同一请求也可能以
+`kind: "new-session"` 的 `postMessage` 到达；请求 id 让两条投递路径保持幂等。
+URL 参数和 storage 条目在首次使用后即被消费，因此 iframe 重载不会创建第二个空白
+会话。
+
 ## 8. 复用 paseo-relay
 
 Mesh 只复用 paseo-relay 的 **路由能力**，relay 看到的是不透明、有序的 WebSocket

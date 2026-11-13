@@ -9,6 +9,12 @@
 
 ## Unreleased
 
+### 新增（Added）
+
+- 远程工作区行新增**新建会话**（`+`）。controller 通过 portal 请求内嵌的远端 shell
+  在对应工作区打开原生的空白会话，然后选中它；每个请求带唯一 id，URL 与
+  postMessage 重试两条投递路径保持幂等。
+
 ## 0.1.3 - 2026-11-13
 
 ### 新增（Added）

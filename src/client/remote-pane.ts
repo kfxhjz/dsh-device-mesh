@@ -7,6 +7,8 @@
  * official center column; the Host portal proxy republishes the remote DSH UI
  * on loopback, so the iframe never needs a remote credential.
  */
+import type { RemoteNewSessionRequest } from './types.js'
+
 const PANE_ATTR = 'data-device-mesh-remote-pane'
 const STYLE_ID = 'dm-remote-pane-style'
 const CENTER_SELECTOR = '[class$="_centerCol"], [class$="_viewArea"]'
@@ -45,6 +47,7 @@ let currentDeviceId: string | null = null
 let loaded = false
 let activeSession: string | null = null
 let pendingSession: string | null = null
+let pendingNewSession: RemoteNewSessionRequest | null = null
 let sessionTimers: ReturnType<typeof setTimeout>[] = []
 let loadingNode: HTMLElement | null = null
 let loadingTimer: ReturnType<typeof setTimeout> | undefined
@@ -94,6 +97,18 @@ function embedUrl(url: string): string {
   }
 }
 
+/** Drop one-shot new-Session params before a reload or an external open. */
+function reloadUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    parsed.searchParams.delete('dm-new-session')
+    parsed.searchParams.delete('dm-new-session-request')
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
 function centerHost(): Element | null {
   return document.querySelector(CENTER_SELECTOR)
 }
@@ -110,17 +125,61 @@ function updateBounds(): void {
   root.style.height = `${Math.round(rect.height)}px`
 }
 
+function postNewSession(request: RemoteNewSessionRequest): void {
+  if (iframe === null) return
+  try {
+    iframe.contentWindow?.postMessage({
+      source: 'dsh-device-mesh-parent',
+      kind: 'new-session',
+      workspaceId: request.workspaceId,
+      requestId: request.requestId,
+    }, '*')
+  } catch { /* ignore */ }
+}
+
+/**
+ * Deliver the pending navigation to the remote shell.
+ *
+ * The URL/sessionStorage path is sufficient on a cold load, but the remote SPA
+ * may strip the query before its plugin boots. Retry the postMessage briefly;
+ * new-Session requests carry a request id, so duplicates are harmless.
+ */
+function scheduleSessionMessages(): void {
+  for (const timer of sessionTimers) clearTimeout(timer)
+  sessionTimers = []
+  if (pendingSession === null && pendingNewSession === null) return
+  sessionTimers = [0, 300, 1_000, 2_000].map(delay => setTimeout(() => {
+    if (pendingNewSession !== null) {
+      postNewSession(pendingNewSession)
+      // Stop retrying after the last attempt so a later manual iframe reload
+      // cannot create another blank Session.
+      if (delay === 2_000) pendingNewSession = null
+      return
+    }
+    if (pendingSession === null || iframe === null) return
+    try {
+      iframe.contentWindow?.postMessage({
+        source: 'dsh-device-mesh-parent',
+        kind: 'open-session',
+        sessionId: pendingSession,
+      }, '*')
+    } catch { /* ignore */ }
+  }, delay))
+}
+
 function mount(): boolean {
   injectStyle()
   const host = centerHost()
   if (root === null) {
     titleNode = h('span', { class: 'dm-remote-pane-title' })
     reloadButton = h('button', { class: 'dm-remote-pane-btn', type: 'button' }, paneStrings.reload)
-    reloadButton.addEventListener('click', () => { if (iframe !== null) iframe.src = iframe.src })
+    reloadButton.addEventListener('click', () => {
+      if (iframe !== null) iframe.src = reloadUrl(iframe.src)
+    })
     externalButton = h('button', { class: 'dm-remote-pane-btn', type: 'button' }, paneStrings.openExternal)
     externalButton.addEventListener('click', () => {
       if (iframe === null) return
-      try { window.open(iframe.src, '_blank', 'noopener,noreferrer') } catch { /* ignore */ }
+      try { window.open(reloadUrl(iframe.src), '_blank', 'noopener,noreferrer') } catch { /* ignore */ }
     })
     closeButton = h('button', { class: 'dm-remote-pane-btn', type: 'button' }, paneStrings.close)
     closeButton.addEventListener('click', () => { hideRemotePane() })
@@ -132,20 +191,7 @@ function mount(): boolean {
       // The remote shell may strip the URL query before its plugin boots; a
       // message sent when the document loads can still arrive before the
       // plugin's listener is installed, so retry briefly.
-      if (pendingSession !== null) {
-        for (const timer of sessionTimers) clearTimeout(timer)
-        sessionTimers = [0, 300, 1_000, 2_000].map(delay => setTimeout(() => {
-          const sessionId = pendingSession
-          if (sessionId === null || iframe === null) return
-          try {
-            iframe.contentWindow?.postMessage({
-              source: 'dsh-device-mesh-parent',
-              kind: 'open-session',
-              sessionId,
-            }, '*')
-          } catch { /* ignore */ }
-        }, delay))
-      }
+      scheduleSessionMessages()
     })
     loadingNode = h('div', { class: 'dm-remote-pane-loading', role: 'status' }, paneStrings.loading)
     root = h('div', { [PANE_ATTR]: '', role: 'region', 'aria-label': paneStrings.ariaLabel },
@@ -154,10 +200,19 @@ function mount(): boolean {
       loadingNode)
     window.addEventListener('message', (event) => {
       if (event.source !== iframe?.contentWindow) return
-      const data = event.data as { source?: unknown; kind?: unknown; sessionId?: unknown } | null
+      const data = event.data as {
+        source?: unknown
+        kind?: unknown
+        sessionId?: unknown
+        message?: unknown
+      } | null
       if (data?.source === 'dsh-device-mesh-remote' && data.kind === 'session-changed'
         && typeof data.sessionId === 'string' && data.sessionId.length > 0) {
         activeSession = data.sessionId
+        return
+      }
+      if (data?.source === 'dsh-device-mesh-remote' && data.kind === 'new-session-failed') {
+        console.warn('[device-mesh] remote new session failed:', data.message)
         return
       }
       if (data?.source !== 'dsh-device-mesh-portal' || data.kind !== 'auth-failed') return
@@ -181,6 +236,7 @@ export function showRemotePane(
   url: string,
   sessionId?: string,
   strings: RemotePaneStrings = DEFAULT_STRINGS,
+  newSession?: RemoteNewSessionRequest,
 ): boolean {
   paneStrings = strings
   if (!canEmbed()) return false
@@ -196,18 +252,30 @@ export function showRemotePane(
   titleNode.textContent = deviceName
   if (sameDevice) {
     // Keep the already-loaded remote SPA; only switch the Session inside it.
-    if (sessionId !== undefined && sessionId.length > 0) {
-      try {
-        iframe.contentWindow?.postMessage({
-          source: 'dsh-device-mesh-parent',
-          kind: 'open-session',
-          sessionId,
-        }, '*')
-      } catch { /* ignore */ }
+    if (newSession !== undefined) {
+      pendingNewSession = newSession
+      pendingSession = null
+      scheduleSessionMessages()
+    } else {
+      pendingNewSession = null
+      if (sessionId !== undefined && sessionId.length > 0) {
+        for (const timer of sessionTimers) clearTimeout(timer)
+        sessionTimers = []
+        try {
+          iframe.contentWindow?.postMessage({
+            source: 'dsh-device-mesh-parent',
+            kind: 'open-session',
+            sessionId,
+          }, '*')
+        } catch { /* ignore */ }
+      }
     }
   } else {
     loaded = false
-    pendingSession = sessionId !== undefined && sessionId.length > 0 ? sessionId : null
+    pendingSession = newSession === undefined && sessionId !== undefined && sessionId.length > 0
+      ? sessionId
+      : null
+    pendingNewSession = newSession ?? null
     if (loadingNode !== null) {
       loadingNode.hidden = false
       loadingNode.textContent = paneStrings.loading
@@ -235,6 +303,10 @@ export function showRemotePane(
 
 /** Hide the remote pane (the iframe is kept for a quick re-open). */
 export function hideRemotePane(): void {
+  // Do not let an unconsumed navigation leak into a later re-open/load.
+  pendingNewSession = null
+  for (const timer of sessionTimers) clearTimeout(timer)
+  sessionTimers = []
   if (root !== null) root.hidden = true
   if (keepAlive !== undefined) {
     clearInterval(keepAlive)

@@ -253,5 +253,23 @@ test('switching to a remote host mirrors its workspaces in the sidebar', { timeo
     await fresh.close().catch(() => undefined)
   }
 
+  // New Session from the remote mirror: the workspace row's + asks the remote
+  // shell to create a blank Session; the mirrored listing must pick it up.
+  await page.locator('[data-device-mesh-host-toggle]').click()
+  await page.locator(`[data-dm-host-id="${device.deviceId}"]`).click()
+  await remote.waitFor({ state: 'visible', timeout: 20_000 })
+  const emptyWorkspace = page.locator('[data-dm-remote-workspace]').nth(1)
+  await emptyWorkspace.waitFor({ state: 'visible', timeout: 20_000 })
+  const sessionsBefore = await page.locator('[data-dm-remote-session]').count()
+  await emptyWorkspace.hover()
+  await emptyWorkspace.locator('.dm-remote-new-btn').click()
+  await page.waitForTimeout(4_500)
+  if (await emptyWorkspace.getAttribute('aria-expanded') !== 'true') await emptyWorkspace.click()
+  await waitFor(
+    async () => (await page.locator('[data-dm-remote-session]').count()) > sessionsBefore,
+    10_000,
+    () => 'the new remote Session did not appear in the sidebar',
+  )
+
   assert.deepEqual(failures, [], `the sidebar reported runtime errors: ${failures.join(' | ')}`)
 })

@@ -180,6 +180,40 @@ test('renders the remote mirror with a spinner for a running remote session', as
   }
 })
 
+test('remote workspace rows offer a new-session action', async () => {
+  setupDom()
+  setSelectedHost('dm_remote')
+  await refreshMeshState()
+
+  const started: Array<{
+    readonly deviceId: string
+    readonly workspaceId: string
+    readonly requestId: string
+  }> = []
+  const teardown = mountSidebarHost({
+    t: (key: string) => key,
+    openDevices: () => {},
+    openPortal: (deviceId: string, _sessionId?: string, newSession?: { workspaceId: string; requestId: string }) => {
+      if (newSession !== undefined) started.push({ deviceId, ...newSession })
+    },
+    connectDevice: () => {},
+  })
+  try {
+    const workspace = document.querySelector('[data-dm-remote-workspace="ws-remote"]')
+    assert.ok(workspace)
+    const newSession = workspace.querySelector<HTMLButtonElement>('.dm-remote-new-btn')
+    assert.ok(newSession, 'remote workspace rows offer a new-session action')
+    assert.equal(newSession.getAttribute('aria-label'), 'remote.newSessionIn')
+    newSession.dispatchEvent(new window.MouseEvent('click', { bubbles: true }) as unknown as Event)
+    assert.equal(started.length, 1)
+    assert.equal(started[0]?.deviceId, 'dm_remote')
+    assert.equal(started[0]?.workspaceId, 'ws-remote')
+    assert.ok((started[0]?.requestId.length ?? 0) > 0)
+  } finally {
+    teardown()
+  }
+})
+
 test('remote mirror view options expose archived sessions and archive actions', async () => {
   setupDom()
   const requests: Array<Record<string, unknown>> = []

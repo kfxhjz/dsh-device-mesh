@@ -784,6 +784,11 @@ textarea.dm-input { resize: vertical; min-height: 72px; }
   cursor: pointer;
 }
 .dm-remote-external-btn:hover { opacity: 1; }
+.dm-remote-new-btn {
+  font-size: var(--dsw-font-xs-13-font-size, 13px);
+  font-weight: 600;
+  line-height: 1;
+}
 .dm-remote-session-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: transparent; }
 .dm-remote-session-dot-running { background: var(--dsw-alias-state-success-primary); }
 .dm-remote-session-dot-unread { background: var(--dsw-alias-brand-primary); }

@@ -8,7 +8,7 @@
  * never receive the Cordis context. See docs/development.md §7 for the slot
  * catalogue and the bundle contract.
  */
-import type { ClientContext, SidebarRightService } from './types.js'
+import type { ClientContext, RemoteNewSessionRequest, SidebarRightService } from './types.js'
 import { NS, en, zh } from './locale.js'
 import { STYLE_ELEMENT_ID, styles } from './styles.js'
 import { DevicesPanel } from './devices-panel.js'
@@ -115,7 +115,11 @@ export function apply(ctx: ClientContext): void {
    * column (dsh-remote-workspace federation pattern); right-sidebar tabs,
    * the system browser and a popup remain fallbacks.
    */
-  const openRemotePortal = (deviceId: string, sessionId?: string): void => {
+  const openRemotePortal = (
+    deviceId: string,
+    sessionId?: string,
+    newSession?: RemoteNewSessionRequest,
+  ): void => {
     const target = getMeshSnapshot().state?.devices.find(device => device.deviceId === deviceId)
     // Pre-open synchronously: the portal URL is only known after an RPC, and a
     // post-await window.open loses user activation and stays blank.
@@ -123,14 +127,29 @@ export function apply(ctx: ClientContext): void {
     void meshApi.openPortal(deviceId)
       .then(async (url) => {
         let targetUrl = url
-        if (sessionId !== undefined && sessionId.length > 0) {
+        if (newSession !== undefined) {
+          try {
+            const deep = new URL(url)
+            deep.searchParams.set('dm-new-session', newSession.workspaceId)
+            deep.searchParams.set('dm-new-session-request', newSession.requestId)
+            deep.searchParams.delete('dm-session')
+            targetUrl = deep.toString()
+          } catch { /* keep the plain portal URL */ }
+        } else if (sessionId !== undefined && sessionId.length > 0) {
           try {
             const deep = new URL(url)
             deep.searchParams.set('dm-session', sessionId)
             targetUrl = deep.toString()
           } catch { /* keep the plain portal URL */ }
         }
-        if (showRemotePane(deviceId, target?.name ?? t('remote.paneAria'), targetUrl, sessionId, remotePaneStrings())) {
+        if (showRemotePane(
+          deviceId,
+          target?.name ?? t('remote.paneAria'),
+          targetUrl,
+          newSession === undefined ? sessionId : undefined,
+          remotePaneStrings(),
+          newSession,
+        )) {
           try { pending?.close() } catch { /* already gone */ }
           return
         }

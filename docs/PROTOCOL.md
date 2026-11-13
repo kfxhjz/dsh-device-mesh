@@ -449,6 +449,15 @@ sidebars. This is best effort: when DSH's UI surface changes, or the remote
 document's CSP forbids inline script/style, the layout/deep-link injection is
 skipped and the user lands on the remote home page and navigates inside it.
 
+A parent that wants a new Session carries
+`?dm-new-session=<workspace-id>&dm-new-session-request=<id>` instead. The portal
+stores `{workspaceId, requestId}` in `sessionStorage`; the remote plugin calls
+the shell's native `uiWorkspace.startSession(workspaceId)` once ready. The same
+request can also arrive as a `postMessage` with `kind: "new-session"` while an
+already-loaded iframe is reused; the request id makes both delivery paths
+idempotent. The URL parameters and storage entry are consumed on first use so an
+iframe reload cannot create a second blank Session.
+
 ## 8. paseo-relay reuse
 The Mesh reuses paseo-relay **routing only**; the relay sees an opaque stream.
 

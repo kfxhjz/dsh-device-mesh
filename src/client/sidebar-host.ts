@@ -15,14 +15,18 @@ import { remoteRefreshDue } from './remote-status.js'
 import { hideRemotePane, remotePaneDevice, remotePaneSession } from './remote-pane.js'
 import { getSelectedHost, requestAddHost, setSelectedHost, subscribeHost } from './host-store.js'
 import type { MeshDeviceView, WorkspaceSummary } from '../shared/protocol.js'
-import type { Translate } from './types.js'
+import type { RemoteNewSessionRequest, Translate } from './types.js'
 
 export interface SidebarHostOptions {
   readonly t: Translate
   /** Select the Devices main panel (management and Add host use it). */
   readonly openDevices: () => void
   /** Open the remote control portal for a paired device. */
-  readonly openPortal: (deviceId: string, sessionId?: string) => void
+  readonly openPortal: (
+    deviceId: string,
+    sessionId?: string,
+    newSession?: RemoteNewSessionRequest,
+  ) => void
   /** Ask the host to reconnect an offline device. */
   readonly connectDevice: (deviceId: string) => void
 }
@@ -150,6 +154,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
   let remoteNotice: string | null = null
   let remoteActionToken = 0
   let confirmDialog: HTMLDialogElement | HTMLElement | null = null
+  const newSessionRefreshTimers = new Set<number>()
   const remoteExpanded = new Set<string>()
   let remoteExpandedDevice: string | null = null
   let remoteActiveSession: string | null = null
@@ -492,6 +497,21 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
   }
 
   /**
+   * A new remote Session appears in `workspaces.list` only after the remote
+   * shell has created it. Refresh twice after the click to catch that without
+   * waiting for the regular status window.
+   */
+  const scheduleRemoteInventoryRefresh = (deviceId: string): void => {
+    for (const delay of [1_500, 4_000]) {
+      const timer = window.setTimeout(() => {
+        newSessionRefreshTimers.delete(timer)
+        if (!disposed && remoteHost === deviceId) requestRemote(deviceId, true)
+      }, delay)
+      newSessionRefreshTimers.add(timer)
+    }
+  }
+
+  /**
    * Keep the selected remote's session status fresh.
    *
    * The Host only refreshes `state.devices[].remoteWorkspaces` when asked, so
@@ -636,6 +656,41 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     remoteActiveSession = null
     remoteSignature = ''
     renderAll()
+  }
+
+  const newSessionRequestId = (): string => {
+    try {
+      if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
+    } catch {
+      // Fall through to the non-crypto id.
+    }
+    return `dm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  }
+
+  /** Ask the remote shell to create a blank Session in one workspace. */
+  const newSessionButton = (
+    device: MeshDeviceView,
+    prefix: string,
+    workspace: WorkspaceSummary,
+  ): HTMLButtonElement => {
+    const label = options.t('remote.newSessionIn', { workspace: workspace.title })
+    const action = document.createElement('button')
+    action.type = 'button'
+    action.className = prefix.length > 0
+      ? `${prefix}iconButton dm-remote-external-btn dm-remote-new-btn`
+      : 'dm-remote-external-btn dm-remote-new-btn'
+    action.textContent = '+'
+    action.title = label
+    action.setAttribute('aria-label', label)
+    action.addEventListener('click', (event) => {
+      event.stopPropagation()
+      options.openPortal(device.deviceId, undefined, {
+        workspaceId: workspace.id,
+        requestId: newSessionRequestId(),
+      })
+      scheduleRemoteInventoryRefresh(device.deviceId)
+    })
+    return action
   }
 
   /** Small inline archive/unarchive glyph (the shell exposes no archive sprite). */
@@ -827,7 +882,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     style: NativeRowStyle,
     device: MeshDeviceView,
     session: WorkspaceSummary['sessions'][number],
-    workspaceTitle?: string,
+    workspace?: WorkspaceSummary,
   ): HTMLElement => {
     // Prefer a clone of a mounted native session row: it carries the shell's
     // exact slots, status-dot geometry, title/resting/action wrappers and
@@ -872,9 +927,9 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
       ?? span(`${style.prefix}rowResting`, '')
     const restingParts: HTMLElement[] = []
     if (archived) restingParts.push(span('dm-remote-archived-badge', options.t('remote.archivedBadge')))
-    if (workspaceTitle !== undefined) {
-      const group = span('dm-remote-session-ws', workspaceTitle)
-      group.title = workspaceTitle
+    if (workspace !== undefined) {
+      const group = span('dm-remote-session-ws', workspace.title)
+      group.title = workspace.title
       restingParts.push(group)
     }
     restingParts.push(time)
@@ -883,6 +938,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
       ?? span(`${style.prefix}rowActions`, '')
     actions.className = `${style.prefix}rowActions dm-remote-actions`
     actions.replaceChildren(
+      ...(workspace === undefined ? [] : [newSessionButton(device, style.prefix, workspace)]),
       archiveButton(device, style.prefix, session),
       ...(archived ? [] : [externalButton(device, style.prefix, session.id)]),
     )
@@ -897,7 +953,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
   const fallbackSessionNode = (
     device: MeshDeviceView,
     session: WorkspaceSummary['sessions'][number],
-    workspaceTitle?: string,
+    workspace?: WorkspaceSummary,
   ): HTMLElement => {
     const row = document.createElement('div')
     row.className = 'dm-remote-session'
@@ -912,13 +968,14 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
       sessionIndicator(session),
       span('dm-remote-session-title', session.title.length === 0 ? session.id : session.title),
     ]
-    if (workspaceTitle !== undefined) {
-      const group = span('dm-remote-session-ws', workspaceTitle)
-      group.title = workspaceTitle
+    if (workspace !== undefined) {
+      const group = span('dm-remote-session-ws', workspace.title)
+      group.title = workspace.title
       body.push(group)
     }
     if (archived) body.push(span('dm-remote-archived-badge', options.t('remote.archivedBadge')))
     const actions = span('dm-remote-session-meta', '')
+    if (workspace !== undefined) actions.append(newSessionButton(device, '', workspace))
     actions.append(archiveButton(device, '', session))
     if (!archived) actions.append(externalButton(device, '', session.id))
     body.push(actions)
@@ -955,6 +1012,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
       head.setAttribute('data-dm-remote-workspace', workspace.id)
       head.append(
         span('dm-remote-ws-title', workspace.title),
+        newSessionButton(device, 'dm-remote-', workspace),
         externalButton(device, 'dm-remote-', workspace.sessions.find(session => session.archived !== true)?.id),
       )
       const openWorkspace = (): void => {
@@ -1021,7 +1079,10 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     const title = span(`${style.prefix}title`, workspace.title)
     text.append(title)
     const actions = span(`${style.prefix}rowActions dm-remote-actions`, '')
-    actions.append(externalButton(device, style.prefix, workspace.sessions.find(session => session.archived !== true)?.id))
+    actions.append(
+      newSessionButton(device, style.prefix, workspace),
+      externalButton(device, style.prefix, workspace.sessions.find(session => session.archived !== true)?.id),
+    )
     row.append(folder, chevron, text, actions)
     rootSpan.append(row)
     group.append(rootSpan)
@@ -1254,8 +1315,8 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
       list.className = 'dm-remote-flat'
       for (const item of flat) {
         list.append(style === null
-          ? fallbackSessionNode(device, item.session, item.workspace.title)
-          : sessionNode(style, device, item.session, item.workspace.title))
+          ? fallbackSessionNode(device, item.session, item.workspace)
+          : sessionNode(style, device, item.session, item.workspace))
       }
       remoteRoot.append(list)
     } else if (visible.length === 0) {
@@ -1566,6 +1627,8 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     unsubscribeMesh()
     unsubscribeHost()
     window.clearInterval(interval)
+    for (const timer of newSessionRefreshTimers) clearTimeout(timer)
+    newSessionRefreshTimers.clear()
     closeMenu()
     closeViewMenu()
     closeConfirmDialog()

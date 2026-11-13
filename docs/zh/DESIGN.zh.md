@@ -296,8 +296,12 @@ DSH 原生 `sidebar.workspaces` 是被 `ui-workspace` 独占的 single 槽，工
   运行中的会话显示与原生树一致的转圈指示。加载、空、离线、连接中、错误均有明确
   状态；切回本机立即恢复原生列表。远程行绝不伪装成本地行。镜像自带**视图选项**
   （按工作区/单列表分组、按最近更新/标题排序、隐藏/显示/仅显示已归档，按设备
-  记忆）以及逐会话的**归档 / 取消归档**——通过 `session.archive` RPC 调用 daemon 的
-  `workspaceRegistry`，本地与远程视图立即一致。Devices 面板仍负责配对与
+  记忆）、每个工作区行的**新建会话**，以及逐会话的**归档 / 取消归档**——归档通过
+  `session.archive` RPC 调用 daemon 的 `workspaceRegistry`，本地与远程视图立即
+  一致。新建会话不是新的 Mesh RPC：controller 在 portal URL 中带
+  `dm-new-session` 和请求 id，远端这份插件调用 shell 原生的
+  `uiWorkspace.startSession(workspaceId)`；URL/sessionStorage 与重试 postMessage
+  两条路径共享请求 id，最多只创建一个会话。Devices 面板仍负责配对与
   管理。**添加主机**对齐 Paseo：直接连接、粘贴配对链接、远程 SSH（在 SSH 传输实现前
   标注计划中）。
 - **上游边界（Phase 2）**：最终形态是在 `ui-workspace` 增加一个

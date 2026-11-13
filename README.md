@@ -66,7 +66,8 @@ device profile.
   workspace region with a remote mirror (host name, status, workspaces and
   sessions), and selecting this host restores the native local tree. The
   mirror has its own **View options** (group by workspace or one list, order by
-  recent activity or title, hide/show/only archived) and per-session
+  recent activity or title, hide/show/only archived), a **New session** (`+`)
+  action on each remote workspace row, and per-session
   **Archive / Unarchive** actions, while the **Devices** panel remains the
   management surface for pairing and devices.
 - **Compressed remote history** — large `/api/remote.mux` WebSocket messages

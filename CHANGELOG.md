@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Remote workspace rows now offer **New session** (`+`). The controller asks the
+  embedded remote shell to open that workspace's native blank Session through
+  the portal and then selects it; a per-request id makes the URL and
+  postMessage/retry delivery paths idempotent.
+
 ## 0.1.3 - 2026-11-13
 
 ### Added

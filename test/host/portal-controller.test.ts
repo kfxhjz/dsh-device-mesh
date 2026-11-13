@@ -1059,6 +1059,14 @@ describe('portal-controller: header helpers', () => {
     assert.ok(injected.indexOf('dm-embed-shell') < injected.indexOf('</head>'))
   })
 
+  it('carries a one-shot new-session request into the embed shell', () => {
+    const html = '<!doctype html><html><head></head><body>remote</body></html>'
+    const injected = injectEmbedShell(html, undefined, { workspaceId: 'ws-1', requestId: 'req-1' })
+    assert.ok(injected.includes('dsh-device-mesh:dm-new-session'))
+    assert.ok(injected.includes('ws-1'))
+    assert.ok(injected.includes('req-1'))
+  })
+
   it('caps manifest reads and survives oversized bodies (S5)', async () => {
     assert.equal(await readLimitedText(streamOf('a', 'b'), 16, 1_000), 'ab')
     assert.equal(await readLimitedText(streamOf('a'.repeat(64)), 16, 1_000), undefined)
