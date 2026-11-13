@@ -87,8 +87,11 @@ step; a single failed “remote prompt/approval” item blocks the release.
       platform matrix, known limitations). The tag pushes
       `.github/workflows/release.yml`, which verifies the tag against
       `package.json`, reruns the gate, writes `SHA256SUMS`, and generates the
-      release body from `CHANGELOG.md`. Publishing to npm is optional; the `.tgz`
-      is a supported artifact.
+      release body from `CHANGELOG.md`.
+- [ ] Publish to npm. The workflow publishes automatically when the repository
+      secret `NPM_TOKEN` is set (with provenance); otherwise run
+      `npm publish --access public --provenance` from a clean checkout. The
+      `.tgz` remains a supported fallback artifact.
 
 ## 5. Known limitations to repeat in every release note
 

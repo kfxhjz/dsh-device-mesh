@@ -102,8 +102,44 @@ npm 元数据。
 
 | 安装方式 | 命令 | 说明 |
 |---|---|---|
-| CLI | `dsh plugin --profile <profile> add "$PWD"` | 追加 bundle；目录安装会链接 checkout。 |
-| 桌面 GUI / agent 工具 | 设置 → 插件 / `plugin_manager` | 同一操作；agent 工具需要 `danger-full-access` 或逐次批准。 |
+| npm registry | `dsh plugin --profile <profile> add dsh-device-mesh` | 版本发布后推荐给用户；安装预构建文件，无需构建授权。 |
+| Release tarball | `dsh plugin --profile <profile> add ./dsh-device-mesh-<version>.tgz` | 预构建兜底；受支持的交付物。 |
+| 本地 checkout | `dsh plugin --profile <profile> add "$PWD"` | 追加 bundle 并链接 checkout；开发回路。 |
+| 桌面 GUI / agent 工具 | 设置 → 插件 / `plugin_manager` | 同一套 pnpm 操作；安装本地目录。agent 工具需要 `danger-full-access` 或逐次批准。 |
+
+### DSH profile
+
+DSH 的 **profile** 是 `$DSH_HOME/profiles/<name>/` 下按顺序叠加插件 bundle patch 层的
+具名环境。它拥有自己的 `package.json`（`dsh.profile.bundles` 列表与依赖）和
+`cordis.patch.yml`，所以装进一个 profile 的 bundle 不会出现在另一个 profile 中。
+`dsh plugin --profile <name> add …` 会在该 profile 目录内运行 pnpm，并把 bundle 追加进
+列表；`--profile` 是必填的，profile 会在首次使用时初始化。
+
+| 你的启动方式 | 安装到 |
+|---|---|
+| DSH Desktop 桌面版 | `desktop` |
+| `dsh web` | `web` |
+| `dsh headless` | `headless` |
+| `dsh tui` | `tui` |
+| `dsh --profile <name>` | `<name>` |
+
+```sh
+# 桌面版
+dsh plugin --profile desktop add dsh-device-mesh
+
+# 运行 `dsh web` 的无头服务器
+dsh plugin --profile web add dsh-device-mesh
+
+# 基于随附 web 模板创建的自定义 profile
+dsh --from-default-profile web --profile edge --dump-config
+dsh plugin --profile edge add dsh-device-mesh
+
+# 不启动检查
+dsh plugin --profile desktop list --depth 0
+dsh --profile desktop --dump-config
+```
+
+`$DSH_HOME` 默认是 `~/.dsh`，profile 位于 `~/.dsh/profiles/` 下。
 
 链接的目录不会被 `files` 过滤，因此重新构建后无需重新安装即可生效；`files` 只作用于
 `npm pack`。git 安装针对源码运行，因此 `prepare` 脚本需要在 profile 的 pnpm 设置中

@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: write
+  # npm provenance uses the GitHub OIDC token.
+  id-token: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -17,12 +19,16 @@ jobs:
     name: Verify, package and publish
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: 26
           cache: npm
+          # Writes the npm auth line that NODE_AUTH_TOKEN below fills in.
+          registry-url: https://registry.npmjs.org
       - uses: pnpm/action-setup@v6
         with:
           version: 11
@@ -62,3 +68,11 @@ jobs:
             dsh-device-mesh-*.tgz
             SHA256SUMS
           fail_on_unmatched_files: true
+      - name: Publish to npm
+        if: env.NPM_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+        run: npm publish --access public --provenance
+      - name: npm publish skipped
+        if: env.NPM_TOKEN == ''
+        run: echo "::notice::NPM_TOKEN is not configured; skipping npm publish."

@@ -107,8 +107,45 @@ layer with `dsh --profile <profile> --dump-config`; never edit profile files by 
 
 | Install surface | Command | Notes |
 |---|---|---|
-| CLI | `dsh plugin --profile <profile> add "$PWD"` | Appends the bundle; a directory install links the checkout. |
-| Desktop GUI / agent tool | Settings → Plugins / `plugin_manager` | Same operation; the agent tool needs `danger-full-access` or per-call approval. |
+| npm registry | `dsh plugin --profile <profile> add dsh-device-mesh` | Recommended for users once the version is published; installs prebuilt files, no build approval. |
+| Release tarball | `dsh plugin --profile <profile> add ./dsh-device-mesh-<version>.tgz` | Prebuilt fallback; a supported artifact. |
+| Local checkout | `dsh plugin --profile <profile> add "$PWD"` | Appends the bundle and links the checkout; the development loop. |
+| Desktop GUI / agent tool | Settings → Plugins / `plugin_manager` | Same pnpm operation; installs a local directory. The agent tool needs `danger-full-access` or per-call approval. |
+
+### DSH profiles
+
+A DSH **profile** is a named, ordered stack of plugin-bundle patch layers under
+`$DSH_HOME/profiles/<name>/`. It owns its `package.json` (the `dsh.profile.bundles`
+list and dependencies) and its `cordis.patch.yml`, so a bundle installed into one
+profile is invisible to another. `dsh plugin --profile <name> add …` runs pnpm in
+that profile directory and appends the bundle to its list; `--profile` is
+required, and a profile is initialized on first use.
+
+| You start | Install into |
+|---|---|
+| DSH Desktop | `desktop` |
+| `dsh web` | `web` |
+| `dsh headless` | `headless` |
+| `dsh tui` | `tui` |
+| `dsh --profile <name>` | `<name>` |
+
+```sh
+# Desktop app
+dsh plugin --profile desktop add dsh-device-mesh
+
+# Headless server running `dsh web`
+dsh plugin --profile web add dsh-device-mesh
+
+# A custom profile created from the shipped web template
+dsh --from-default-profile web --profile edge --dump-config
+dsh plugin --profile edge add dsh-device-mesh
+
+# Inspect without booting
+dsh plugin --profile desktop list --depth 0
+dsh --profile desktop --dump-config
+```
+
+`$DSH_HOME` defaults to `~/.dsh`, so profiles live under `~/.dsh/profiles/`.
 
 A linked directory is not filtered by `files`, so a rebuild is picked up without reinstalling; `files` applies
 to `npm pack`. A git install runs against sources, so a `prepare` script needs approval in the profile's pnpm

@@ -18,6 +18,7 @@
 | 文档 | 内容 |
 |---|---|
 | [development.zh.md](zh/development.zh.md) | 维护者指南：版本基线、仓库结构、DSH 打包与 client-bundle 契约、本地回路、host/UI 集成点、测试、调试与发布政策。 |
+| [profiles.zh.md](zh/profiles.zh.md) · [English](profiles.md) | DSH profile：`--profile` 选什么、该装进哪个 profile（`desktop`、`web`、`headless`、`tui`、自定义），以及安装/检查/移除示例。 |
 | [adr/0001-remote-control-in-dsh.zh.md](zh/adr/0001-remote-control-in-dsh.zh.md) | 为什么 MVP 使用 host 侧设备网格加回环 portal，而不是第二棵 DSH client 树，以及第二阶段有哪些变化。 |
 
 架构决策以 ADR 形式记录在 [`zh/adr/`](zh/adr/) 下；新增决策请写新 ADR，而不是改写已接受的 ADR。

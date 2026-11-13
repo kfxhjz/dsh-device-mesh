@@ -80,8 +80,10 @@ E2E 可选环境变量：
 
 - [ ] 打 `v0.1.x` tag 并发布 release notes（安装命令、校验和、平台矩阵、已知限制）。
       推送 tag 会触发 `.github/workflows/release.yml`：校验 tag 与 `package.json`、重跑
-      门槛、生成 `SHA256SUMS`，并从 `CHANGELOG.md` 生成 release body。npm 发布可选；
-      `.tgz` 是受支持的交付物。
+      门槛、生成 `SHA256SUMS`，并从 `CHANGELOG.md` 生成 release body。
+- [ ] 发布到 npm。配置仓库 secret `NPM_TOKEN` 后工作流会自动发布（带 provenance）；
+      否则在干净的 checkout 中运行 `npm publish --access public --provenance`。
+      `.tgz` 仍作为受支持的兜底交付物。
 
 ## 5. 每次 release notes 都要重复的已知限制
 

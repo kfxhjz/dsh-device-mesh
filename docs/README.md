@@ -26,6 +26,7 @@ must bump the protocol version.
 | Document | Contents |
 |---|---|
 | [development.md](development.md) · [中文](zh/development.zh.md) | Maintainer guide: version baseline, repository layout, DSH packaging and client-bundle contracts, local loop, host/UI integration points, testing, debugging and release policy. |
+| [profiles.md](profiles.md) · [中文](zh/profiles.zh.md) | DSH profiles: what `--profile` selects, which profile to install into (`desktop`, `web`, `headless`, `tui`, custom), and install/inspect/remove examples. |
 | [adr/0001-remote-control-in-dsh.md](adr/0001-remote-control-in-dsh.md) · [中文](zh/adr/0001-remote-control-in-dsh.zh.md) | Why the MVP uses a host-side device mesh plus a loopback portal instead of a second DSH client tree, and what changes in Phase 2. |
 
 Architectural decisions are recorded as ADRs under [`adr/`](adr/); add a new ADR
