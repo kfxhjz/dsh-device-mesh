@@ -88,8 +88,10 @@ step; a single failed “remote prompt/approval” item blocks the release.
       `.github/workflows/release.yml`, which verifies the tag against
       `package.json`, reruns the gate, writes `SHA256SUMS`, and generates the
       release body from `CHANGELOG.md`.
-- [ ] Publish to npm. The workflow publishes automatically when the repository
-      secret `NPM_TOKEN` is set (with provenance); otherwise run
+- [ ] Publish to npm. The workflow publishes automatically through npm
+      **trusted publishing** (GitHub OIDC); no `NPM_TOKEN` secret is used. The
+      package's Trusted Publisher must list repository
+      `kfxhjz/dsh-device-mesh` and workflow file `release.yml`. As a fallback, run
       `npm publish --access public --provenance` from a clean checkout. The
       `.tgz` remains a supported fallback artifact.
 

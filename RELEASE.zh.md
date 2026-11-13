@@ -81,9 +81,11 @@ E2E 可选环境变量：
 - [ ] 打 `v0.1.x` tag 并发布 release notes（安装命令、校验和、平台矩阵、已知限制）。
       推送 tag 会触发 `.github/workflows/release.yml`：校验 tag 与 `package.json`、重跑
       门槛、生成 `SHA256SUMS`，并从 `CHANGELOG.md` 生成 release body。
-- [ ] 发布到 npm。配置仓库 secret `NPM_TOKEN` 后工作流会自动发布（带 provenance）；
-      否则在干净的 checkout 中运行 `npm publish --access public --provenance`。
-      `.tgz` 仍作为受支持的兜底交付物。
+- [ ] 发布到 npm。工作流通过 npm **trusted publishing**（GitHub OIDC）自动发布，
+      不再使用 `NPM_TOKEN` secret。npm 包的 Trusted Publisher 必须配置仓库
+      `kfxhjz/dsh-device-mesh` 和工作流文件 `release.yml`。兜底方式是在干净的
+      checkout 中运行 `npm publish --access public --provenance`；`.tgz` 仍作为
+      受支持的兜底交付物。
 
 ## 5. 每次 release notes 都要重复的已知限制
 
