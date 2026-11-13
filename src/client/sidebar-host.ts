@@ -674,12 +674,36 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     workspace: WorkspaceSummary,
   ): HTMLButtonElement => {
     const label = options.t('remote.newSessionIn', { workspace: workspace.title })
-    const action = document.createElement('button')
+    // Prefer the official workspace create button: it carries the shell's exact
+    // icon (new-chat outline) and iconButton sizing/hover styling. Fall back to
+    // a same-icon button when no local workspace row is mounted.
+    const template = document.querySelector(
+      'svg[data-icon="dsw-icon-new-chat-outline-regular"]',
+    )?.closest<HTMLButtonElement>('button') ?? undefined
+    const action = template?.cloneNode(true) as HTMLButtonElement | undefined
+      ?? document.createElement('button')
+    if (template === undefined) {
+      action.className = prefix.length > 0
+        ? `${prefix}iconButton dm-remote-external-btn dm-remote-new-btn`
+        : 'dm-remote-external-btn dm-remote-new-btn'
+      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      svg.setAttribute('width', '14')
+      svg.setAttribute('height', '14')
+      svg.setAttribute('data-icon', 'dsw-icon-new-chat-outline-regular')
+      svg.setAttribute('aria-hidden', 'true')
+      const use = document.createElementNS('http://www.w3.org/2000/svg', 'use')
+      use.setAttribute('href', '#dsw-icon-new-chat-outline-regular')
+      svg.append(use)
+      action.replaceChildren(svg)
+    } else {
+      action.classList.add('dm-remote-new-btn')
+      action.removeAttribute('aria-keyshortcuts')
+      action.removeAttribute('aria-haspopup')
+      action.removeAttribute('aria-expanded')
+      action.removeAttribute('aria-describedby')
+      action.removeAttribute('data-context-menu-trigger')
+    }
     action.type = 'button'
-    action.className = prefix.length > 0
-      ? `${prefix}iconButton dm-remote-external-btn dm-remote-new-btn`
-      : 'dm-remote-external-btn dm-remote-new-btn'
-    action.textContent = '+'
     action.title = label
     action.setAttribute('aria-label', label)
     action.addEventListener('click', (event) => {
