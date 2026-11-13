@@ -1,6 +1,7 @@
 # DSH 设备网格
 
 [![CI](https://github.com/kfxhjz/dsh-device-mesh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kfxhjz/dsh-device-mesh/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-device-mesh)](https://www.npmjs.com/package/dsh-device-mesh)
 [![Release](https://img.shields.io/github/v/release/kfxhjz/dsh-device-mesh)](https://github.com/kfxhjz/dsh-device-mesh/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kfxhjz/dsh-device-mesh/blob/main/LICENSE)
 [![DSH](https://img.shields.io/badge/DSH-0.2.2--rc.2-4D6BFE)](https://github.com/kfxhjz/dsh-device-mesh#requirements)
@@ -104,14 +105,54 @@ Device A (daemon)                              Device B (controller)
 
 ## 安装
 
-插件是标准的 DSH 第三方 bundle：一个 host 插件加一个 Web client 插件。多数用户可以直接安装
-[最新 release](https://github.com/kfxhjz/dsh-device-mesh/releases/latest) 里的预构建 `.tgz`，无需自己构建：
+插件是标准的 DSH 第三方 bundle：一个 host 插件加一个 Web client 插件。多数用户可以直接
+从 npm 安装预构建包，无需自己构建：
 
 ```sh
-dsh plugin --profile <profile> add ./dsh-device-mesh-<version>.tgz
+dsh plugin --profile <profile> add dsh-device-mesh
 ```
 
-下面的步骤面向贡献者，以及没有发布产物的平台，从源码构建。
+同一条命令也接受
+[最新 release](https://github.com/kfxhjz/dsh-device-mesh/releases/latest) 里的预构建 `.tgz`
+（`add ./dsh-device-mesh-<version>.tgz`），用于某个版本还没上 npm 时兜底。下面的步骤面向贡献者，从源码构建。
+
+### `--profile` 是什么？
+
+`--profile` 是必填的：它决定插件装进哪一套 DSH 运行时组合。profile 是
+`$DSH_HOME/profiles/<name>/` 下按顺序叠加插件 bundle patch 层的一套环境，拥有自己的
+`package.json`（bundle 列表与依赖）和 `cordis.patch.yml`。装进一个 profile 的 bundle
+不会出现在另一个 profile 中，所以要装进你实际启动的那个：
+
+| 你的启动方式 | 安装到 |
+|---|---|
+| DSH Desktop 桌面版 | `desktop` |
+| `dsh web` | `web` |
+| `dsh headless` | `headless` |
+| `dsh tui` | `tui` |
+| `dsh --profile <name>`（自定义） | `<name>` |
+
+```sh
+# 桌面版
+dsh plugin --profile desktop add dsh-device-mesh
+
+# 运行 `dsh web` 的无头服务器
+dsh plugin --profile web add dsh-device-mesh
+
+# 基于随附 web 模板创建的自定义 profile
+dsh --from-default-profile web --profile edge --dump-config
+dsh plugin --profile edge add dsh-device-mesh
+```
+
+不启动也能检查 profile：
+
+```sh
+dsh plugin --profile desktop list --depth 0   # 已安装的包
+dsh --profile desktop --dump-config           # 组合后的 patch 层
+```
+
+`$DSH_HOME` 默认是 `~/.dsh`，profile 目录在 `$DSH_HOME/profiles/` 下。不带 `--profile`
+的 `dsh plugin` 会直接报错，所以始终写清楚要启动的 profile。桌面版用 `desktop`；CLI 的
+`dsh web` 用 `web`。
 
 ### 1. 从源码构建
 

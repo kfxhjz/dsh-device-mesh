@@ -1,6 +1,7 @@
 # DSH Device Mesh
 
 [![CI](https://github.com/kfxhjz/dsh-device-mesh/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kfxhjz/dsh-device-mesh/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/dsh-device-mesh)](https://www.npmjs.com/package/dsh-device-mesh)
 [![Release](https://img.shields.io/github/v/release/kfxhjz/dsh-device-mesh)](https://github.com/kfxhjz/dsh-device-mesh/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/kfxhjz/dsh-device-mesh/blob/main/LICENSE)
 [![DSH](https://img.shields.io/badge/DSH-0.2.2--rc.2-4D6BFE)](https://github.com/kfxhjz/dsh-device-mesh#requirements)
@@ -155,16 +156,55 @@ Device A (daemon)                              Device B (controller)
 ## Install
 
 The plugin is a standard DSH third-party bundle: a host plugin plus a Web client
-plugin. Most users can install the prebuilt `.tgz` from the
-[latest release](https://github.com/kfxhjz/dsh-device-mesh/releases/latest)
-without building anything:
+plugin. Install the prebuilt package from npm without building anything:
 
 ```sh
-dsh plugin --profile <profile> add ./dsh-device-mesh-<version>.tgz
+dsh plugin --profile <profile> add dsh-device-mesh
 ```
 
-The steps below build from source for contributors and for platforms without a
-published artifact.
+The same command also accepts the `.tgz` from the
+[latest release](https://github.com/kfxhjz/dsh-device-mesh/releases/latest)
+(`add ./dsh-device-mesh-<version>.tgz`), which is the fallback while a specific
+version is not on npm. The steps below build from source for contributors.
+
+### Which profile?
+
+`--profile` is required: it selects which DSH runtime composition receives the
+plugin. A profile is a named, ordered stack of plugin-bundle patch layers under
+`$DSH_HOME/profiles/<name>/`, with its own `package.json` (bundle list and
+dependencies) and `cordis.patch.yml`. A bundle installed into one profile is not
+visible to another, so install into the profile you actually boot:
+
+| You start | Install into |
+|---|---|
+| DSH Desktop | `desktop` |
+| `dsh web` | `web` |
+| `dsh headless` | `headless` |
+| `dsh tui` | `tui` |
+| `dsh --profile <name>` (custom) | `<name>` |
+
+```sh
+# Desktop app
+dsh plugin --profile desktop add dsh-device-mesh
+
+# Headless server running `dsh web`
+dsh plugin --profile web add dsh-device-mesh
+
+# A custom profile created from the shipped web template
+dsh --from-default-profile web --profile edge --dump-config
+dsh plugin --profile edge add dsh-device-mesh
+```
+
+Inspect a profile without booting it:
+
+```sh
+dsh plugin --profile desktop list --depth 0   # installed packages
+dsh --profile desktop --dump-config           # composed patch layers
+```
+
+`$DSH_HOME` defaults to `~/.dsh`; profile directories live under
+`$DSH_HOME/profiles/`. `dsh plugin` without `--profile` fails, so always name the
+profile you boot. The desktop app uses `desktop`; the CLI `dsh web` uses `web`.
 
 ### 1. Build from source
 
