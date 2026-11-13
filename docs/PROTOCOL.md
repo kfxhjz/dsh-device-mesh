@@ -283,9 +283,12 @@ Control JSON travels inside `0x10`:
 | `info` | `{}` | `{ device: { deviceId, name, platform, signPk, dhPk, appVersion }, protocol: 1, capabilities: ["rpc","portal","workspaces","pairing","relay"], hostLabel }` | First call after authentication. |
 | `workspaces.list` | `{ refresh?: boolean }` | `{ updatedAt, workspaces: [Workspace], truncated?: boolean }` | Cached 60 s unless `refresh` is true; `truncated` means the wire budget dropped rows. |
 | `workspaces.subscribe` | `{ intervalMs?: number }` | `{ ok: true }` | Acknowledged; v1 controllers poll. |
+| `workspaces.subscribe` | `{}` | `{ ok: true }` | No-op in v1; controllers poll. |
+| `session.archive` | `{ sessionId, stopActivity? }` | `{ archived: true }` | Requires a control grant. Calls the daemon's registry archive set. |
+| `session.unarchive` | `{ sessionId }` | `{ archived: false }` | Requires a control grant. Idempotent. |
 | `portal.prepare` | `{}` | `{ ok: true }` | Optional warm-up of the local DSH browser session. |
 | `portal.http` | `{ streamId, method, path, headers }` | `{ streamId, status, headers }` | Request/response bodies follow on the same stream. |
-| `portal.ws.open` | `{ streamId, path, headers, protocols? }` | `{ streamId, protocol? }` | Duplex WebSocket messages follow on the same stream. |
+| `portal.ws.open` | `{ streamId, path, headers, protocols?, compress? }` | `{ streamId, protocol?, compressed? }` | Duplex WebSocket messages follow on the same stream. |
 | `pair.status` | `{ requestId }` | `{ state: "pending" \| "approved" \| "denied", peer? }` | Only call allowed before approval. |
 | `ping` | `{}` | `{ now }` | Health/diagnostic check. |
 
@@ -296,10 +299,12 @@ Control JSON travels inside `0x10`:
   "id": "<workspace-id>", "title": "<workspace-title>", "path": "<workspace-path>",
   "sessions": [{
     "id": "<session-id>", "title": "<session-title>", "updatedAt": "2026-11-09T00:00:00.000Z",
-    "running": false, "awaitingUser": false, "unread": false
+    "running": false, "awaitingUser": false, "unread": false, "archived": false
   }]
 }
 ```
+`archived` is optional (older daemons omit it); the remote mirror treats an absent
+field as not archived.
 Workspace listings report at most 200 sessions per workspace and at most 200
 sessions across the whole listing (100 workspaces maximum); the result is also
 trimmed so its JSON fits one 64 KiB control frame. When anything is dropped the
@@ -404,9 +409,9 @@ origin. The daemon's DSH cookie never crosses the Mesh.
 1. The browser sends `Upgrade: websocket`; the controller validates the
    token/cookie, accepts the upgrade and records the requested subprotocols.
 2. The controller sends
-   `{ "id": n, "method": "portal.ws.open", "params": { "streamId, path, headers, protocols? } }`.
+   `{ "id": n, "method": "portal.ws.open", "params": { "streamId, path, headers, protocols?, compress? } }`.
    The daemon dials the local DSH WebSocket with its cookie and sanitized headers,
-   then replies `{ streamId, protocol? }` or an error.
+   then replies `{ streamId, protocol?, compressed? }` or an error.
 3. Each message is one or more `0x11` chunks. The last chunk sets `0x08`
    (`MESSAGE_END`); an empty message is `Data | MESSAGE_END` with no payload.
    Each chunk is within the 64 KiB sealed limit, so larger messages span chunks.
@@ -414,6 +419,14 @@ origin. The daemon's DSH cookie never crosses the Mesh.
    (`0x00` = text, `0x01` = binary), because the DSH Remote-stream gateway
    requires text frames; the receiver must forward it as `string` or bytes
    accordingly. HTTP streams never carry this byte.
+   The same byte is `0x02` (gzip text) or `0x03` (gzip binary) when the message
+   is compressed. The controller opts in per exchange with
+   `params.compress: true`; the daemon replies `compressed: true` only when it
+   supports the feature, so a mixed-version pair keeps using `0x00`/`0x01`. The
+   daemon gzips messages of at least 1024 bytes in both directions before the
+   Mesh framing splits them, and inflates a tagged message on receipt. This is
+   independent of `ws` per-message deflate, which is hop-by-hop and would not
+   reduce the Mesh/relay transfer.
    Either side closing ends the stream; an abnormal close uses the abort flag with
    a stable code, and the daemon closes upstream with `1000`/`1011`.
 

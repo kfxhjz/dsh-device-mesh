@@ -32,6 +32,7 @@ import type {
 } from '../shared/protocol.ts'
 import { getHostService, HANDSHAKE_TIMEOUT_MS, isRecord, silentLogger } from './config.ts'
 import type { HostContextLike, MeshLogger } from './config.ts'
+import { encodePortalWsMessage, gunzipWsPayload } from './ws-compression.ts'
 
 /** HTTP methods the daemon proxy accepts from a controller portal. */
 const PROXY_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
@@ -201,6 +202,15 @@ export function rewriteLocation(location: string, origin: string): string {
 /** Default cap on bytes buffered for one inbound portal WebSocket stream. */
 export const MAX_INBOUND_WS_QUEUE_BYTES = 8 * 1024 * 1024
 
+/**
+ * Cap on raw WebSocket bytes waiting for gzip on one daemon exchange.
+ *
+ * The queue cap above only sees compressed bytes; without this budget a fast
+ * peer could keep thousands of large uncompressed messages in the compression
+ * promise chain. One DSH message is bounded by the upstream `maxPayload`.
+ */
+export const MAX_PENDING_COMPRESSION_BYTES = 32 * 1024 * 1024
+
 /** Options for {@link ChunkQueue}. */
 export interface ChunkQueueOptions {
   /** Maximum bytes retained for a stalled consumer (default 8 MiB). */
@@ -356,6 +366,8 @@ interface CookieState {
 /** Result of `portal.ws.open` on the daemon side. */
 export interface DaemonWsExchange {
   readonly protocol?: string
+  /** Gzip was negotiated for this exchange (both directions). */
+  readonly compressed?: boolean
   readonly inbound: ChunkStream
   readonly outbound: StreamSink
 }
@@ -581,6 +593,9 @@ export class PortalDaemon {
     const protocols = Array.isArray(params.protocols)
       ? params.protocols.filter((item): item is string => typeof item === 'string').slice(0, 8)
       : undefined
+    // Per-exchange, opt-in gzip across the Mesh. The controller only asks for it
+    // when it can inflate the replies, so an older peer keeps the raw envelope.
+    const compress = params.compress === true
 
     const connect = async (cookiePair: string): Promise<PortalWebSocket> => {
       const headers = sanitizeProxyRequestHeaders(params.headers, origin, cookiePair, path)
@@ -666,23 +681,60 @@ export class PortalDaemon {
         socket.terminate()
       }
     }
+    // `ws` delivers messages in order; keep that order while gzip runs off the
+    // event loop, otherwise a large compressed history snapshot could overtake a
+    // following small frame on the Mesh.
+    let inboundChain: Promise<void> = Promise.resolve()
+    let pendingCompressionBytes = 0
+    const finishInbound = (): void => {
+      // Close/error must not drop a message that is still being compressed:
+      // enqueue the terminal marker behind the current compression work.
+      void inboundChain.then(() => { queue.end() }, () => { queue.end() })
+    }
     socket.on('message', (data: unknown, isBinary: boolean) => {
       const chunk = toUint8Array(data, isBinary)
+      if (chunk === undefined) return
       // Preserve the local DSH opcode across the byte-oriented Mesh framing (C1).
-      if (chunk !== undefined) queue.push(encodeWsMessage(chunk, isBinary ? 'binary' : 'text'))
+      const kind = isBinary ? 'binary' : 'text'
+      if (!compress) {
+        queue.push(encodeWsMessage(chunk, kind))
+        return
+      }
+      pendingCompressionBytes += chunk.byteLength
+      if (pendingCompressionBytes > MAX_PENDING_COMPRESSION_BYTES) {
+        pendingCompressionBytes -= chunk.byteLength
+        const failure = new MeshRpcError('mesh/busy', 'too many uncompressed websocket bytes')
+        this.lastErrorValue = failure.message
+        queue.fail(failure)
+        try { socket.terminate() } catch { /* already gone */ }
+        return
+      }
+      inboundChain = inboundChain.then(async () => {
+        try {
+          queue.push(await encodePortalWsMessage(chunk, kind, true))
+        } finally {
+          pendingCompressionBytes -= chunk.byteLength
+        }
+      }).catch((error: unknown) => {
+        pendingCompressionBytes = 0
+        const message = error instanceof Error ? error.message : String(error)
+        this.lastErrorValue = message
+        queue.fail(new MeshRpcError('mesh/internal', 'portal WebSocket message compression failed'))
+        try { socket.terminate() } catch { /* already gone */ }
+      })
     })
     socket.on('close', () => {
       signal.removeEventListener('abort', onStreamAbort)
       stopHeartbeat()
       this.sockets.delete(socket)
-      queue.end()
+      finishInbound()
     })
     socket.on('error', (error: Error) => {
       signal.removeEventListener('abort', onStreamAbort)
       stopHeartbeat()
       this.lastErrorValue = error.message
       this.sockets.delete(socket)
-      queue.end()
+      finishInbound()
     })
     if (signal.aborted) {
       onStreamAbort()
@@ -693,11 +745,15 @@ export class PortalDaemon {
     const outbound: StreamSink = {
       write: async (chunk: Uint8Array): Promise<void> => {
         const message = decodeWsMessage(chunk)
+        if (message.compressed && !compress) {
+          throw new MeshRpcError('mesh/bad-request', 'compressed portal message was not negotiated')
+        }
+        const payload = message.compressed ? await gunzipWsPayload(message.payload) : message.payload
         while (socket.bufferedAmount > 8 * 1024 * 1024) await delay(10)
         // Text frames must stay text on the local DSH wire; binary frames must
         // not be coerced to UTF-8 (C1).
-        if (message.kind === 'text') socket.send(new TextDecoder().decode(message.payload))
-        else socket.send(Buffer.from(message.payload))
+        if (message.kind === 'text') socket.send(new TextDecoder().decode(payload))
+        else socket.send(Buffer.from(payload))
       },
       end: async (): Promise<void> => {
         try {
@@ -717,6 +773,7 @@ export class PortalDaemon {
 
     return {
       ...(socket.protocol.length > 0 ? { protocol: socket.protocol } : {}),
+      ...(compress ? { compressed: true } : {}),
       inbound: queue,
       outbound,
     }

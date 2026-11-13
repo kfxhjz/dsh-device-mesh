@@ -203,6 +203,7 @@ function safeWorkspacesResult(value: unknown): WorkspacesResult | undefined {
           running: session.running === true,
           awaitingUser: session.awaitingUser === true,
           unread: session.unread === true,
+          ...(session.archived === true ? { archived: true } : {}),
         }))
         : [],
     })),
@@ -518,6 +519,19 @@ export class DeviceMeshBroker {
         ...(result.truncated === true ? { truncated: true } : {}),
       }
     }
+    /**
+     * A workspace-limited grant may only mutate Sessions it can see. The
+     * bounded listing is not authoritative, so resolve the Session's owning
+     * workspace directly; an unknown owner fails closed.
+     */
+    const ensureSessionInScope = async (peer: PeerRecord, sessionId: string): Promise<void> => {
+      const allowed = peer.scope.workspaces
+      if (allowed === 'all') return
+      const workspaceId = await this.workspaces.workspaceIdOf(sessionId)
+      if (workspaceId === undefined || !allowed.includes(workspaceId)) {
+        throw new MeshRpcError('mesh/unauthorized', 'Session is outside the controller workspace grant')
+      }
+    }
     const handlers: DaemonSessionHandlers = {
       rpc: async (method, params) => {
         // `pair.status` is the only call a not-yet-approved controller may make
@@ -544,6 +558,27 @@ export class DeviceMeshBroker {
           case 'workspaces.list': {
             const refresh = isRecord(params) && params.refresh === true
             return filterWorkspaces(peer, await this.workspaces.list({ refresh }))
+          }
+          case 'session.archive': {
+            ensureControl(peer)
+            const sessionId = isRecord(params) && typeof params.sessionId === 'string'
+              ? params.sessionId
+              : ''
+            if (sessionId.length === 0) throw new MeshRpcError('mesh/bad-request', 'session.archive needs sessionId')
+            await ensureSessionInScope(peer, sessionId)
+            const stopActivity = isRecord(params) && params.stopActivity === true
+            await this.workspaces.archiveSession(sessionId, stopActivity ? { stopActivity: true } : {})
+            return { archived: true }
+          }
+          case 'session.unarchive': {
+            ensureControl(peer)
+            const sessionId = isRecord(params) && typeof params.sessionId === 'string'
+              ? params.sessionId
+              : ''
+            if (sessionId.length === 0) throw new MeshRpcError('mesh/bad-request', 'session.unarchive needs sessionId')
+            await ensureSessionInScope(peer, sessionId)
+            await this.workspaces.unarchiveSession(sessionId)
+            return { archived: false }
           }
           case 'workspaces.subscribe':
             // v1 has no daemon→controller event channel in the session seam;
@@ -1468,6 +1503,44 @@ export class DeviceMeshBroker {
     runtime.remoteWorkspacesAt = result.updatedAt
     this.changed()
     return result
+  }
+
+  /**
+   * Archive or restore one Session on a connected daemon.
+   *
+   * Returns the refreshed remote listing so the sidebar can drop/add the row
+   * without waiting for the next poll window.
+   * @param deviceId - paired remote device.
+   * @param sessionId - Session on that device.
+   * @param archived - true archives, false restores.
+   * @param stopActivity - allow archiving a Session with running work.
+   */
+  async archiveSession(
+    deviceId: string,
+    sessionId: string,
+    archived: boolean,
+    stopActivity = false,
+  ): Promise<WorkspacesResult> {
+    const peer = this.requireDaemon(deviceId)
+    if (peer.revokedAt !== null) throw new MeshRpcError('mesh/revoked', 'device has been revoked')
+    const session = this.runtimeFor(deviceId).session
+    if (session === undefined || !session.open) {
+      throw new MeshRpcError('mesh/not-found', 'device is not connected')
+    }
+    await session.rpc(
+      archived ? 'session.archive' : 'session.unarchive',
+      { sessionId, ...(stopActivity ? { stopActivity: true } : {}) },
+    )
+    try {
+      return await this.refreshWorkspaces(deviceId)
+    } catch (error) {
+      // The mutation already succeeded; a failed follow-up listing must not turn
+      // it into an error the sidebar would report. Reuse the last listing and let
+      // the next poll catch up.
+      const cached = this.runtimeFor(deviceId).remoteWorkspaces
+      if (cached !== undefined) return cached
+      throw error
+    }
   }
 
   /** Open the loopback portal for one connected daemon. */

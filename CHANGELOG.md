@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- The remote workspace mirror now has a **View options** menu: group by
+  workspace or one flat list, order by recent activity or title, and hide, show
+  or isolate archived sessions. Preferences are stored per remote device.
+- Remote session rows offer **Archive** / **Unarchive**. Archiving a session
+  with running work asks for confirmation first. Archived rows are dimmed and
+  cannot be opened until they are restored. The action uses the daemon's own
+  registry, so the change is immediately visible to that device's local user.
+
+### Fixed
+
+- Remote archive/unarchive actions now take effect: the controller-side
+  workspace sanitizer preserves the `archived` flag, so an archived row
+  disappears from the default view, filters work, and the row can be restored.
+- Loading a large remote Session's history no longer sends the whole
+  `/api/remote.mux` WebSocket payload uncompressed across the Mesh. Portal
+  WebSocket messages above 1 KiB are now gzipped end to end (negotiated per
+  exchange), which typically shrinks a multi-megabyte JSON history snapshot
+  several-fold over LAN/relay. Older peers keep the previous raw envelope.
+
 ## 0.1.2 - 2026-11-12
 
 ### Fixed

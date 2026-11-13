@@ -30,6 +30,7 @@ describe('api: workspace normalization', () => {
               running: true,
               awaitingUser: true,
               unread: true,
+              archived: true,
             },
             { id: '', title: 'dropped: empty id' },
             'not a session',
@@ -54,6 +55,7 @@ describe('api: workspace normalization', () => {
       running: true,
       awaitingUser: true,
       unread: true,
+      archived: true,
     }])
   })
 

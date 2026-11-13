@@ -282,9 +282,11 @@ plaintext      = 0x10 || UTF-8 JSON
 | `info` | `{}` | `{ device: { deviceId, name, platform, signPk, dhPk, appVersion }, protocol: 1, capabilities: ["rpc","portal","workspaces","pairing","relay"], hostLabel }` | 认证后的第一个调用。 |
 | `workspaces.list` | `{ refresh?: boolean }` | `{ updatedAt, workspaces: [Workspace], truncated?: boolean }` | 默认缓存 60 秒，`refresh` 绕过；`truncated` 表示列表因 wire 预算被裁剪。 |
 | `workspaces.subscribe` | `{ intervalMs?: number }` | `{ ok: true }` | 仅确认；v1 由 controller 轮询。 |
+| `session.archive` | `{ sessionId, stopActivity? }` | `{ archived: true }` | 需要 control 授权；写入 daemon 的注册表归档集合。 |
+| `session.unarchive` | `{ sessionId }` | `{ archived: false }` | 需要 control 授权；幂等。 |
 | `portal.prepare` | `{}` | `{ ok: true }` | 可选：预热 daemon 本机 DSH 浏览器会话。 |
 | `portal.http` | `{ streamId, method, path, headers }` | `{ streamId, status, headers }` | 请求/响应 body 在同一流上传输。 |
-| `portal.ws.open` | `{ streamId, path, headers, protocols? }` | `{ streamId, protocol? }` | 双向 WebSocket 消息在同一流上传输。 |
+| `portal.ws.open` | `{ streamId, path, headers, protocols?, compress? }` | `{ streamId, protocol?, compressed? }` | 双向 WebSocket 消息在同一流上传输。 |
 | `pair.status` | `{ requestId }` | `{ state: "pending" \| "approved" \| "denied", peer? }` | 批准前唯一允许的调用。 |
 | `ping` | `{}` | `{ now }` | 健康检查/诊断。 |
 
@@ -296,10 +298,11 @@ plaintext      = 0x10 || UTF-8 JSON
   "sessions": [{
     "id": "<session-id>", "title": "<session-title>",
     "updatedAt": "2026-11-09T00:00:00.000Z",
-    "running": false, "awaitingUser": false, "unread": false
+    "running": false, "awaitingUser": false, "unread": false, "archived": false
   }]
 }
 ```
+`archived` 为可选字段（旧 daemon 不返回）；远程镜像把缺失视为未归档。
 
 每个工作区最多上报 200 个会话，整份列表最多 200 个会话、100 个工作区，并且会裁剪到
 单条 64 KiB 控制帧以内；发生裁剪时结果带 `truncated: true`。字段来自 DSH 的
@@ -391,14 +394,20 @@ daemon 的 DSH cookie 永不跨 Mesh。
 1. 浏览器发起 `Upgrade: websocket`；controller 校验 token/cookie，接受升级并记录
    请求的子协议。
 2. controller 发送
-   `{ "id": n, "method": "portal.ws.open", "params": { "streamId, path, headers, protocols? } }`；
+   `{ "id": n, "method": "portal.ws.open", "params": { "streamId, path, headers, protocols?, compress? } }`；
    daemon 带 cookie 和清洗后的头连接本机 DSH WebSocket，成功回复
-   `{ streamId, protocol? }`，失败回复错误。
+   `{ streamId, protocol?, compressed? }`，失败回复错误。
 3. 每条 WebSocket 消息由一个或多个 `0x11` 块承载；消息最后一块置 `0x08`
    （`MESSAGE_END`），空消息为无 payload 的 `Data | MESSAGE_END`。每个块不超过
    64 KiB 密封上限，更大的消息跨块传输。**消息 payload 的首字节携带 WebSocket
    opcode**（`0x00` = text，`0x01` = binary），因为 DSH 的 Remote stream 网关要求
    text 帧；接收方必须据此以 `string` 或 bytes 转发。HTTP 流不携带该字节。
+   该首字节也可为 `0x02`（gzip text）或 `0x03`（gzip binary），表示消息已压缩。
+   controller 用 `params.compress: true` 按连接选择启用；daemon 仅在支持该特性时
+   回复 `compressed: true`，因此新旧版本混连时仍使用 `0x00`/`0x01`。daemon 在
+   消息进入网格分块前对双向 ≥1024 字节的消息做 gzip，并在收到带标记的消息时解压。
+   这与 `ws` 的 per-message deflate 无关：后者是逐跳的，无法减少网格/中继上的
+   实际传输量。
    任一端关闭即结束流；异常关闭使用中止标志与稳定错误码，daemon 正常关闭上游使用
    `1000`，异常使用 `1011`。
 

@@ -170,6 +170,14 @@ daemon 侧：
   归一化到本地 authority，以满足 DSH 的同源 `/api` 围栏；响应丢弃
   `Content-Encoding`/`Content-Length`，因为 body 已解码后重新流式发送。
 
+HTTP 的文本资源（JSON/JS/CSS）由 daemon 在过网格前 gzip；但会话历史和流式输出走
+DSH 的 `/api/remote.mux` WebSocket，HTTP gzip 覆盖不到。`ws` 的
+per-message deflate 是逐跳的：在 daemon 的回环连接上启用只会在进入网格前解压，
+不会减少 LAN/中继传输。因此 portal 增加一个可选的按连接封包：controller 在
+`portal.ws.open` 中带上 `compress`，daemon 回复 `compressed` 后，双方把每条完整的
+WebSocket 消息（≥1 KiB）先 gzip，再交给 32 KiB 网格分块；接收端解压。多 MB 的 JSON
+历史快照通常能缩小数倍；新旧版本混连时继续使用原来的 `0x00`/`0x01` 封包。
+
 portal 属于 `control` scope；`view` 预留且审批时拒绝。iframe 携带
 `?dm-session=<id>&dm-embed=1`：portal 保存 id，远端这份插件在 shell 就绪后通过
 `uiWorkspace.openSession` 打开对应会话；这是尽力而为，DSH UI 变化或远端 CSP 禁止注入的内联 script/style 时
@@ -282,11 +290,14 @@ DSH 原生 `sidebar.workspaces` 是被 `ui-workspace` 独占的 single 槽，工
 
 - **MVP（零上游改动）**：左栏「工作区」上方的**主机切换器**显示当前主机，下拉列出本机、
   已配对主机及实时状态。选中远程主机时：原生工作区浏览器被隐藏（`dm-remote-mode`），
-  同一区域渲染**只读远程镜像**——主机名、状态、刷新/管理/打开远程控制，以及该主机的
+  同一区域渲染**远程镜像**——主机名、状态、刷新/管理/打开远程控制，以及该主机的
   工作区与会话；点击任意一项打开该设备的 portal。选中远程主机期间，镜像每 5 秒向
   该设备重新请求一次工作区列表，running / awaiting / unread 状态跟随 daemon 更新；
   运行中的会话显示与原生树一致的转圈指示。加载、空、离线、连接中、错误均有明确
-  状态；切回本机立即恢复原生列表。远程行绝不伪装成本地行。Devices 面板仍负责配对与
+  状态；切回本机立即恢复原生列表。远程行绝不伪装成本地行。镜像自带**视图选项**
+  （按工作区/单列表分组、按最近更新/标题排序、隐藏/显示/仅显示已归档，按设备
+  记忆）以及逐会话的**归档 / 取消归档**——通过 `session.archive` RPC 调用 daemon 的
+  `workspaceRegistry`，本地与远程视图立即一致。Devices 面板仍负责配对与
   管理。**添加主机**对齐 Paseo：直接连接、粘贴配对链接、远程 SSH（在 SSH 传输实现前
   标注计划中）。
 - **上游边界（Phase 2）**：最终形态是在 `ui-workspace` 增加一个

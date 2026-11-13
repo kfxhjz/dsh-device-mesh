@@ -313,6 +313,17 @@ Text assets are gzip-compressed by the daemon before crossing the Mesh/relay
 2 MB on the wire. HTML is left uncompressed because the controller injects the
 embed stylesheet into it.
 
+Session history and streamed output use DSH's `/api/remote.mux` WebSocket, so
+the HTTP gzip above never sees them. `ws` per-message deflate is hop-by-hop:
+enabling it on the daemon's loopback dial would inflate before the Mesh framing
+and would not shrink the LAN/relay transfer. The portal therefore opts in to an
+additive per-exchange envelope: the controller sets `portal.ws.open`'s
+`compress`, the daemon confirms `compressed`, and each complete WebSocket message
+of at least 1 KiB is gzipped before it is split into 32 KiB Mesh chunks and
+inflated by the receiving portal. A multi-megabyte JSON history snapshot
+typically shrinks several-fold; the older raw `0x00`/`0x01` envelope remains the
+fallback for a mixed-version pair.
+
 The portal controller buffers small text assets (HTML/JS/CSS/JSON, `/plugins/`
 and `/assets/`) before sending headers. If the Mesh session drops mid-transfer,
 the request can be replayed against the adopted session instead of truncating a
@@ -348,7 +359,7 @@ into the native tree without replacing that tree.
 - **MVP (no upstream change).** The **sidebar host switcher above Workspaces**
   displays the current host and lists this host plus paired remotes with live
   status. Selecting a remote host hides the native browser (`dm-remote-mode`)
-  and renders a **read-only remote mirror** in the same region: host name,
+  and renders a **remote mirror** in the same region: host name,
   status, refresh/manage/open-control actions, and that host's workspaces and
   sessions; clicking one opens the device portal. While a remote host stays
   selected, the mirror re-requests that device's workspace listing every 5 s so
@@ -356,8 +367,13 @@ into the native tree without replacing that tree.
   same spinner as the native tree. Loading, empty, offline,
   connecting and error states are explicit, and the native list returns
   immediately when this host is selected again. Remote rows never masquerade as
-  local. **Add host** mirrors Paseo's flow: direct connection, paste pairing
-  link, and remote SSH (marked planned until an SSH transport exists).
+  local. The mirror carries its own **View options** menu (group by workspace or
+  one flat list, order by recent activity or title, hide/show/only archived
+  sessions, persisted per device) and per-session **Archive / Unarchive**
+  through the `session.archive` RPC, which calls the daemon's
+  `workspaceRegistry` so local and remote views agree. **Add host** mirrors
+  Paseo's flow: direct connection, paste pairing link, and remote SSH (marked
+  planned until an SSH transport exists).
 - **Upstream boundary (Phase 2).** The clean final form is a small
   `sidebar.workspace.row.trailing` slot in `ui-workspace` (roughly 30 lines) so a
   plugin can render a device badge on a native workspace row. The plugin would

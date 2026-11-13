@@ -66,7 +66,20 @@ async function beginPendingRequest(
 
 const WORKSPACES: WorkspacesResult = {
   updatedAt: '2026-01-01T00:00:00.000Z',
-  workspaces: [{ id: 'ws', title: 'Remote', path: '/remote', sessions: [] }],
+  workspaces: [{
+    id: 'ws',
+    title: 'Remote',
+    path: '/remote',
+    sessions: [{
+      id: 'session-x',
+      title: 'Archived session',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      running: false,
+      awaitingUser: false,
+      unread: false,
+      archived: true,
+    }],
+  }],
 }
 
 interface FakeReply {
@@ -434,8 +447,17 @@ describe('broker: controller role', () => {
 
       const workspaces = await fixture.broker.refreshWorkspaces(daemonSide.deviceId)
       assert.deepEqual(workspaces, WORKSPACES)
+      // The controller-side sanitizer must preserve the archive flag; dropping
+      // it makes the remote mirror's archive filter and unarchive action inert.
+      assert.equal(workspaces.workspaces[0]?.sessions[0]?.archived, true)
       const stateWithWorkspaces = fixture.broker.state().devices.find(device => device.deviceId === daemonSide.deviceId)
       assert.equal(stateWithWorkspaces?.remoteWorkspaces?.length, 1)
+
+      // Archive flows through the daemon RPC and then refreshes the listing.
+      const archived = await fixture.broker.archiveSession(daemonSide.deviceId, 'session-x', true, true)
+      assert.deepEqual(archived, WORKSPACES)
+      const archiveCall = fixture.connected[0]?.rpcCalls.find(call => call.method === 'session.archive')
+      assert.deepEqual(archiveCall?.params, { sessionId: 'session-x', stopActivity: true })
 
       const portal = await fixture.broker.openPortal(daemonSide.deviceId)
       assert.match(portal.url, /^http:\/\/127\.0\.0\.1:44444\//u)
@@ -589,6 +611,8 @@ describe('broker: authorization model', () => {
       // Everything that can drive the device must be refused.
       for (const call of [
         () => viewHandlers.rpc('portal.prepare', {}, signal),
+        () => viewHandlers.rpc('session.archive', { sessionId: 's1' }, signal),
+        () => viewHandlers.rpc('session.unarchive', { sessionId: 's1' }, signal),
         () => viewHandlers.http({ method: 'GET', path: '/', headers: {} }, streamOf(), signal),
         () => viewHandlers.ws({ path: '/', headers: {} }, signal),
       ]) {

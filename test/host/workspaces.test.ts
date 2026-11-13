@@ -536,6 +536,83 @@ describe('workspaces: wire budget (H2)', () => {
   })
 })
 
+describe('workspaces: archived sessions', () => {
+  it('marks sessions from the registry-global archive set', async () => {
+    const services = baseServices()
+    const registry = services.workspaceRegistry as Record<string, unknown>
+    registry.archivedSessionIds = ['session-2']
+    const result = await makeProvider(services).list()
+    const sessions = result.workspaces[0]?.sessions ?? []
+    assert.equal(sessions.find(session => session.id === 'session-2')?.archived, true)
+    assert.equal(sessions.find(session => session.id === 'session-1')?.archived, undefined)
+  })
+
+  it('archives and restores through workspaceRegistry, invalidating the cache', async () => {
+    const calls: Array<{ readonly method: string; readonly args: unknown[] }> = []
+    let listCalls = 0
+    const services = baseServices({
+      workspaceRegistry: {
+        list: () => {
+          listCalls += 1
+          return []
+        },
+        archiveSession: (...args: unknown[]) => { calls.push({ method: 'archive', args }) },
+        unarchiveSession: (...args: unknown[]) => { calls.push({ method: 'unarchive', args }) },
+        archivedSessionIds: [],
+      },
+    })
+    const provider = makeProvider(services)
+    await provider.list()
+    await provider.archiveSession('session-1', { stopActivity: true })
+    await provider.unarchiveSession('session-1')
+    assert.deepEqual(calls, [
+      { method: 'archive', args: ['session-1', { stopActivity: true }] },
+      { method: 'unarchive', args: ['session-1', {}] },
+    ])
+    await provider.list()
+    assert.equal(listCalls, 2, 'a mutation must drop the cached listing')
+  })
+
+  it('degrades to mesh/unsupported when the registry has no archive API', async () => {
+    const provider = makeProvider(baseServices())
+    await assert.rejects(
+      () => provider.archiveSession('session-1'),
+      (error: unknown) => error instanceof Error && 'code' in error && error.code === 'mesh/unsupported',
+    )
+  })
+
+  it('resolves the owning workspace for an allowlist check', async () => {
+    const provider = makeProvider(baseServices())
+    assert.equal(await provider.workspaceIdOf('session-1'), 'ws-1')
+    assert.equal(await provider.workspaceIdOf('session-persisted'), 'ws-1')
+    assert.equal(await provider.workspaceIdOf('missing-session'), undefined)
+  })
+
+  it('maps DSH archive domain errors to stable wire codes', async () => {
+    const thrower = (name: string): (() => never) => () => {
+      const error = new Error(name)
+      error.name = name
+      throw error
+    }
+    for (const [name, code] of [
+      ['WorkspaceActiveSessionError', 'workspace/session-active'],
+      ['WorkspaceUnknownSessionError', 'session/not-found'],
+    ] as const) {
+      const services = baseServices({
+        workspaceRegistry: {
+          list: () => [],
+          archivedSessionIds: [],
+          archiveSession: thrower(name),
+        },
+      })
+      await assert.rejects(
+        () => makeProvider(services).archiveSession('session-1'),
+        (error: unknown) => (error as { code?: string }).code === code,
+      )
+    }
+  })
+})
+
 describe('workspaces: cache', () => {
   it('caches for 60 s and refreshes on demand', async () => {
     let clock = 1_000_000

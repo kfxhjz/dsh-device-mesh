@@ -647,11 +647,12 @@ export class MeshSessionImpl implements DaemonMeshSession {
       },
     })
     try {
-      const result = await this.rpc<{ streamId: number; protocol?: string }>('portal.ws.open', {
+      const result = await this.rpc<{ streamId: number; protocol?: string; compressed?: boolean }>('portal.ws.open', {
         streamId,
         path: params.path,
         headers: params.headers,
         ...(params.protocols === undefined ? {} : { protocols: params.protocols }),
+        ...(params.compress === true ? { compress: true } : {}),
       })
       if (!isPlainObject(result) || result.streamId !== streamId) {
         throw new MeshRpcError('mesh/bad-request', 'invalid portal.ws.open result')
@@ -663,6 +664,7 @@ export class MeshSessionImpl implements DaemonMeshSession {
       const protocol = typeof result.protocol === 'string' ? result.protocol : undefined
       return {
         ...(protocol === undefined ? {} : { protocol }),
+        ...(result.compressed === true ? { compressed: true } : {}),
         messages: input as ChunkStream & { readonly messageBoundaries: true },
         sink,
       }
@@ -1010,10 +1012,15 @@ export class MeshSessionImpl implements DaemonMeshSession {
           path: parsed.path,
           headers: parsed.headers,
           ...(parsed.protocols === undefined ? {} : { protocols: parsed.protocols }),
+          ...(parsed.compress === true ? { compress: true } : {}),
         },
         record?.abortController.signal ?? this.sessionAbort.signal,
       )
-      if (!this.sendSuccess(id, { streamId, ...(exchange.protocol === undefined ? {} : { protocol: exchange.protocol }) })) {
+      if (!this.sendSuccess(id, {
+        streamId,
+        ...(exchange.protocol === undefined ? {} : { protocol: exchange.protocol }),
+        ...(exchange.compressed === true ? { compressed: true } : {}),
+      })) {
         // Nothing will consume the WebSocket exchange; abort it so the handler's
         // upstream socket is closed instead of leaking (M2/M3).
         this.failPortalStream(streamId, 'mesh/busy')
@@ -1535,7 +1542,13 @@ function parsePortalHttpParams(value: unknown):
 
 function parsePortalWsParams(
   value: unknown,
-): { streamId: number; path: string; headers: Record<string, string>; protocols?: readonly string[] } | undefined {
+): {
+  streamId: number
+  path: string
+  headers: Record<string, string>
+  protocols?: readonly string[]
+  compress?: boolean
+} | undefined {
   if (!isPlainObject(value)) return undefined
   const streamId = parseStreamId(value.streamId, 'controller')
   if (streamId === undefined) return undefined
@@ -1554,7 +1567,13 @@ function parsePortalWsParams(
     }
     protocols = list
   }
-  return { streamId, path: value.path, headers, ...(protocols === undefined ? {} : { protocols }) }
+  return {
+    streamId,
+    path: value.path,
+    headers,
+    ...(protocols === undefined ? {} : { protocols }),
+    ...(value.compress === true ? { compress: true } : {}),
+  }
 }
 
 // ---------------------------------------------------------------------------

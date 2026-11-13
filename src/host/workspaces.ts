@@ -18,6 +18,7 @@ import type {
   WorkspaceSummary,
   WorkspacesResult,
 } from '../shared/protocol.ts'
+import { MeshRpcError } from '../shared/mesh-session.ts'
 import { getHostService, isRecord, serviceMethod, silentLogger, WORKSPACE_CACHE_MS } from './config.ts'
 import type { HostContextLike, MeshLogger } from './config.ts'
 
@@ -130,6 +131,7 @@ export interface SessionFacts {
   readonly running?: boolean
   readonly awaitingUser?: boolean
   readonly unread?: boolean
+  readonly archived?: boolean
 }
 
 /** Facts extracted from one DSH workspace. */
@@ -153,6 +155,7 @@ export function mapSessionSummary(
     running: facts?.running ?? false,
     awaitingUser: facts?.awaitingUser ?? false,
     unread: facts?.unread ?? false,
+    ...(facts?.archived === true ? { archived: true } : {}),
   }
 }
 
@@ -369,6 +372,27 @@ function sessionIdOf(session: unknown): string | undefined {
   return stringOrUndefined(session.id)
 }
 
+/**
+ * Read the registry-global archive set. A reduced composition or a renamed
+ * service yields an empty set: the listing still works and simply reports no
+ * archived sessions instead of failing.
+ */
+function archivedIdsOf(registry: unknown): Set<string> {
+  const ids = new Set<string>()
+  if (registry === undefined || registry === null) return ids
+  let value: unknown
+  try {
+    value = Reflect.get(registry, 'archivedSessionIds')
+  } catch {
+    return ids
+  }
+  if (!Array.isArray(value)) return ids
+  for (const id of value) {
+    if (typeof id === 'string' && id.length > 0) ids.add(id)
+  }
+  return ids
+}
+
 // ---------------------------------------------------------------------------
 // Persisted session snapshots (ctx.sessionPersistence.list)
 // ---------------------------------------------------------------------------
@@ -539,6 +563,85 @@ export class WorkspaceProvider {
   }
 
   /**
+   * Resolve the workspace that currently accounts for one Session.
+   *
+   * Used to enforce a controller's workspace allowlist for mutations without
+   * depending on the bounded/truncated listing. Returns undefined when the
+   * Session is unknown or the registry is unavailable.
+   * @param sessionId - Session to look up.
+   */
+  async workspaceIdOf(sessionId: string): Promise<string | undefined> {
+    const registry = this.service('workspaceRegistry')
+    const listWorkspaces = serviceMethod(registry, 'list')
+    if (listWorkspaces === undefined) return undefined
+    let raw: unknown
+    try {
+      raw = await listWorkspaces()
+    } catch {
+      return undefined
+    }
+    if (!Array.isArray(raw)) return undefined
+    for (const workspace of raw) {
+      if (!isRecord(workspace)) continue
+      const id = stringOrUndefined(workspace.id)
+      const sessionIds = Array.isArray(workspace.sessionIds) ? workspace.sessionIds : []
+      if (id !== undefined && sessionIds.includes(sessionId)) return id
+    }
+    return undefined
+  }
+
+  /**
+   * Add one Session to the daemon's registry-global archive set.
+   *
+   * The archive set is the same one the native DSH sidebar uses, so a remote
+   * archive action is visible to the daemon's local user immediately.
+   * @param sessionId - Session to archive.
+   * @param options - `stopActivity` stops running work before archiving.
+   */
+  async archiveSession(sessionId: string, options: { readonly stopActivity?: boolean } = {}): Promise<void> {
+    await this.mutateArchive('archiveSession', sessionId, options)
+  }
+
+  /** Remove one Session from the daemon's archive set (idempotent). */
+  async unarchiveSession(sessionId: string): Promise<void> {
+    await this.mutateArchive('unarchiveSession', sessionId, {})
+  }
+
+  private async mutateArchive(
+    method: 'archiveSession' | 'unarchiveSession',
+    sessionId: string,
+    options: { readonly stopActivity?: boolean },
+  ): Promise<void> {
+    const registry = this.service('workspaceRegistry')
+    const mutate = serviceMethod(registry, method)
+    if (mutate === undefined) {
+      throw new MeshRpcError(
+        'mesh/unsupported',
+        `workspaceRegistry.${method} is unavailable on this host`,
+      )
+    }
+    try {
+      await mutate(sessionId, options)
+    } catch (error) {
+      // DSH's domain errors carry stable names but no wire code, so preserve
+      // them here; otherwise the controller only sees a generic mesh/internal.
+      if (error instanceof Error) {
+        if (error.name === 'WorkspaceActiveSessionError') {
+          throw new MeshRpcError('workspace/session-active', error.message)
+        }
+        if (error.name === 'WorkspaceUnknownSessionError') {
+          throw new MeshRpcError('session/not-found', error.message)
+        }
+      }
+      throw error
+    } finally {
+      // Even a refused archive can change activity state; never serve a stale
+      // archived flag on the next listing.
+      this.invalidate()
+    }
+  }
+
+  /**
    * List workspaces and session summaries.
    * @param options - `refresh` bypasses the 60 s cache.
    * @returns wire result; never throws.
@@ -569,6 +672,7 @@ export class WorkspaceProvider {
       this.lastErrorValue = 'workspaceRegistry service is unavailable'
       return { updatedAt, workspaces: [] }
     }
+    const archivedSessionIds = archivedIdsOf(registry)
     let rawWorkspaces: unknown
     try {
       rawWorkspaces = await listWorkspaces()
@@ -640,17 +744,20 @@ export class WorkspaceProvider {
     let factsBudget = this.maxFacts
     const factsFor = (sessionId: string): SessionFacts | undefined => {
       if (factsCache.has(sessionId)) return factsCache.get(sessionId)
+      const archived = archivedSessionIds.has(sessionId)
       const live = liveById.get(sessionId)
       const persisted = persistedById.get(sessionId)
       if (live === undefined && persisted === undefined) {
-        factsCache.set(sessionId, undefined)
-        return undefined
+        const facts = archived ? { archived: true } : undefined
+        factsCache.set(sessionId, facts)
+        return facts
       }
       if (factsBudget <= 0) {
         // The row still renders with placeholder facts; signal degraded data.
         this.partialValue = true
-        factsCache.set(sessionId, undefined)
-        return undefined
+        const facts = archived ? { archived: true } : undefined
+        factsCache.set(sessionId, facts)
+        return facts
       }
       factsBudget -= 1
 
@@ -694,6 +801,7 @@ export class WorkspaceProvider {
           running,
           awaitingUser,
           unread: false,
+          ...(archived ? { archived: true } : {}),
         }
       } else {
         facts = {
@@ -702,6 +810,7 @@ export class WorkspaceProvider {
           running: false,
           awaitingUser: false,
           unread: false,
+          ...(archived ? { archived: true } : {}),
         }
       }
       factsCache.set(sessionId, facts)

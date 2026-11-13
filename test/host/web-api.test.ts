@@ -110,6 +110,16 @@ class FakeBroker implements WebApiBroker {
     return WORKSPACES
   }
 
+  async archiveSession(
+    deviceId: string,
+    sessionId: string,
+    archived: boolean,
+    stopActivity?: boolean,
+  ): Promise<WorkspacesResult> {
+    this.record('archiveSession', deviceId, sessionId, archived, stopActivity)
+    return WORKSPACES
+  }
+
   async openPortal(deviceId: string): Promise<{ readonly url: string }> {
     this.record('openPortal', deviceId)
     return { url: 'http://127.0.0.1:40000/?token=x' }
@@ -192,6 +202,18 @@ describe('web-api: endpoints', () => {
       { endpoint: 'device.disconnect', payload: { deviceId: 'd5' }, name: 'disconnectDevice', args: ['d5'] },
       { endpoint: 'workspaces.refresh', payload: { deviceId: 'd6' }, name: 'refreshWorkspaces', args: ['d6'] },
       { endpoint: 'workspaces.refresh', payload: {}, name: 'refreshWorkspaces', args: [undefined] },
+      {
+        endpoint: 'session.archive',
+        payload: { deviceId: 'd6', sessionId: 's1' },
+        name: 'archiveSession',
+        args: ['d6', 's1', true, false],
+      },
+      {
+        endpoint: 'session.archive',
+        payload: { deviceId: 'd6', sessionId: 's1', archived: false, stopActivity: true },
+        name: 'archiveSession',
+        args: ['d6', 's1', false, true],
+      },
       { endpoint: 'portal.open', payload: { deviceId: 'd7' }, name: 'openPortal', args: ['d7'] },
       { endpoint: 'portal.close', payload: { deviceId: 'd8' }, name: 'closePortal', args: ['d8'] },
       { endpoint: 'audit.list', payload: { limit: 5 }, name: 'listAudit', args: [5] },

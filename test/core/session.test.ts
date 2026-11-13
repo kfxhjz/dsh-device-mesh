@@ -432,7 +432,7 @@ interface ControllableWs {
   readonly outboundAborted: string[]
 }
 
-function controllableWs(): ControllableWs {
+function controllableWs(options: { compressed?: boolean } = {}): ControllableWs {
   const queue: Uint8Array[] = []
   const waiters: Array<(result: IteratorResult<Uint8Array>) => void> = []
   const outboundMessages: Uint8Array[] = []
@@ -472,7 +472,12 @@ function controllableWs(): ControllableWs {
   const handlers = makeHandlers({
     ws: async (params) => {
       requestParams = params
-      return { protocol: 'dsh-test', inbound, outbound: sink }
+      return {
+        protocol: 'dsh-test',
+        ...(options.compressed === true ? { compressed: true } : {}),
+        inbound,
+        outbound: sink,
+      }
     },
   })
   return {
@@ -546,6 +551,30 @@ test('portal.ws relays messages both ways with message boundaries preserved', as
     ws.endInbound()
     await flushAsync()
     assert.equal(pair.sessionA.open, true)
+  } finally {
+    pair.sessionA.close()
+    pair.sessionB.close()
+  }
+})
+
+test('portal.ws propagates compression negotiation and flags', async () => {
+  const ws = controllableWs({ compressed: true })
+  const pair = createPair({ handlers: ws.handlers })
+  try {
+    const exchange = await pair.sessionA.ws({ path: '/ws', headers: {}, compress: true })
+    assert.equal(exchange.compressed, true)
+    await waitFor(() => ws.params() !== undefined)
+    assert.equal(ws.params()?.compress, true, 'the controller request carries the opt-in')
+
+    const compressedInbound = encodeWsMessage(Uint8Array.of(1, 2, 3), 'text', true)
+    ws.push(compressedInbound)
+    const result = await exchange.messages[Symbol.asyncIterator]().next()
+    assert.deepEqual(result.value, compressedInbound)
+    assert.equal(decodeWsMessage(result.value).compressed, true)
+
+    await exchange.sink.sendMessage(compressedInbound)
+    await waitFor(() => ws.outboundMessages.length === 1)
+    assert.deepEqual(ws.outboundMessages[0], compressedInbound)
   } finally {
     pair.sessionA.close()
     pair.sessionB.close()

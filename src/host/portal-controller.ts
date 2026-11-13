@@ -32,6 +32,7 @@ import { toBase64Url } from '../shared/protocol.ts'
 import type { PortalHttpParams } from '../shared/protocol.ts'
 import { PORTAL_IDLE_TIMEOUT_MS, PORTAL_MAX_BODY_BYTES, silentLogger } from './config.ts'
 import { PortalCache } from './portal-cache.ts'
+import { encodePortalWsMessage, gunzipWsPayload } from './ws-compression.ts'
 import type { MeshLogger } from './config.ts'
 
 /** Methods a portal forwards (PROTOCOL.md §6.1). */
@@ -65,6 +66,12 @@ const PORTAL_REQUEST_TIMEOUT_MS = 30_000
  * buffering; the bound limits memory a compromised remote UI can force per tab.
  */
 const MAX_BROWSER_WS_MESSAGE_BYTES = 8 * 1024 * 1024
+
+/**
+ * Cap on raw browser WebSocket bytes waiting for gzip on one portal socket.
+ * `ws` bounds each message; this bounds the aggregate held by the async chain.
+ */
+const MAX_PENDING_OUTBOUND_COMPRESSION_BYTES = 16 * 1024 * 1024
 
 /** Maximum bytes read from the remote HTML when building the asset manifest. */
 const MAX_MANIFEST_BYTES = 4 * 1024 * 1024
@@ -1067,6 +1074,10 @@ export class PortalController {
         path: `${url.pathname}${url.search}`,
         headers: sanitizeControllerRequestHeaders(request.headers, this.deviceId),
         ...(protocols.length > 0 ? { protocols } : {}),
+        // Large session-history snapshots travel over this WebSocket; ask the
+        // daemon to gzip them before they enter the Mesh. An older daemon ignores
+        // the flag and reports no `compressed`, so both sides stay compatible.
+        compress: true,
       }
       try {
         if (!this.session.open) await this.waitForOpenSession()
@@ -1185,18 +1196,44 @@ export class PortalController {
       release()
       this.touch()
     }
+    // Browser messages are usually small, but a paste or file chunk can be
+    // large. Keep their order while gzip runs, and let close/abort wait for the
+    // chain so a trailing frame cannot overtake the close on the Mesh.
+    const compress = exchange.compressed === true
+    let outboundChain: Promise<void> = Promise.resolve()
+    let pendingOutboundBytes = 0
+    const failClient = (): void => {
+      try {
+        client.terminate()
+      } catch {
+        // Already gone.
+      }
+    }
     client.on('message', (data: unknown, isBinary: boolean) => {
       const bytes = toUint8Array(data, isBinary)
       if (bytes === undefined) return
       this.touch()
       // Carry the opcode across the byte-oriented Mesh framing (C1).
-      const message = encodeWsMessage(bytes, isBinary ? 'binary' : 'text')
-      void exchange.sink.sendMessage(message).catch(() => {
+      const kind = isBinary ? 'binary' : 'text'
+      if (!compress) {
+        void exchange.sink.sendMessage(encodeWsMessage(bytes, kind)).catch(failClient)
+        return
+      }
+      pendingOutboundBytes += bytes.byteLength
+      if (pendingOutboundBytes > MAX_PENDING_OUTBOUND_COMPRESSION_BYTES) {
+        pendingOutboundBytes -= bytes.byteLength
+        failClient()
+        return
+      }
+      outboundChain = outboundChain.then(async () => {
         try {
-          client.terminate()
-        } catch {
-          // Already gone.
+          await exchange.sink.sendMessage(await encodePortalWsMessage(bytes, kind, true))
+        } finally {
+          pendingOutboundBytes -= bytes.byteLength
         }
+      }).catch(() => {
+        pendingOutboundBytes = 0
+        failClient()
       })
     })
     client.on('close', (code: number, reason: Buffer) => {
@@ -1204,14 +1241,23 @@ export class PortalController {
       if (code === 1006) {
         // Abnormal loss (killed tab / dropped TCP): abort so the daemon closes
         // the upstream DSH socket instead of waiting for a graceful End.
-        void exchange.sink.abort('portal ws client disconnected').catch(() => {})
+        void outboundChain.then(
+          () => exchange.sink.abort('portal ws client disconnected'),
+          () => undefined,
+        ).catch(() => undefined)
         return
       }
-      void exchange.sink.close(code, reason.toString('utf8')).catch(() => {})
+      void outboundChain.then(
+        () => exchange.sink.close(code, reason.toString('utf8')),
+        () => undefined,
+      ).catch(() => undefined)
     })
     client.on('error', () => {
       dispose()
-      void exchange.sink.abort('portal ws client error').catch(() => {})
+      void outboundChain.then(
+        () => exchange.sink.abort('portal ws client error'),
+        () => undefined,
+      ).catch(() => undefined)
     })
     void (async () => {
       try {
@@ -1223,8 +1269,12 @@ export class PortalController {
             break
           }
           const decoded = decodeWsMessage(message)
-          if (decoded.kind === 'text') client.send(new TextDecoder().decode(decoded.payload))
-          else client.send(Buffer.from(decoded.payload))
+          if (decoded.compressed && !compress) {
+            throw new MeshRpcError('mesh/bad-request', 'compressed portal message was not negotiated')
+          }
+          const payload = decoded.compressed ? await gunzipWsPayload(decoded.payload) : decoded.payload
+          if (decoded.kind === 'text') client.send(new TextDecoder().decode(payload))
+          else client.send(Buffer.from(payload))
           this.touch()
         }
         if (client.readyState === client.OPEN) client.close(1000, 'remote closed')

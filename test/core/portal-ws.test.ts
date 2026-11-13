@@ -232,6 +232,29 @@ test('portal websocket keeps text frames text through the real session pair (C1)
   }
 })
 
+test('portal websocket round-trips a large history snapshot through compressed framing', async () => {
+  const dsh = await startFakeDsh({ rejectBinary: false })
+  const harness = await startPortal(dsh)
+  const socket = await openBrowser(harness.url, harness.portal.origin)
+  try {
+    // Comfortably above the gzip threshold and the 32 KiB Mesh chunk size.
+    const payload = JSON.stringify({ messages: Array.from({ length: 2_000 }, (_, index) => ({ index, text: 'history-'.repeat(20) })) })
+    const replyPromise = nextMessage(socket, 10_000)
+    socket.send(payload)
+
+    await waitFor(() => dsh.received.length === 1, 10_000)
+    assert.equal(dsh.received[0]?.data.toString('utf8'), payload)
+
+    const reply = await replyPromise
+    assert.equal(reply.isBinary, false)
+    assert.equal(reply.data.toString('utf8'), `echo:${payload}`)
+  } finally {
+    socket.close()
+    await harness.close()
+    await dsh.close()
+  }
+})
+
 test('portal websocket keeps binary frames binary through the real session pair (C1)', async () => {
   const dsh = await startFakeDsh({ rejectBinary: false })
   const harness = await startPortal(dsh)

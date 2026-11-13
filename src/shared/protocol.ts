@@ -282,6 +282,8 @@ export interface SessionSummary {
   readonly running: boolean
   readonly awaitingUser: boolean
   readonly unread: boolean
+  /** The daemon's registry-global archive set contains this Session. */
+  readonly archived?: boolean
 }
 
 export interface WorkspaceSummary {
@@ -326,11 +328,18 @@ export interface PortalWsParams {
   readonly path: string
   readonly headers: Readonly<Record<string, string>>
   readonly protocols?: readonly string[]
+  /**
+   * Ask the daemon to gzip WebSocket messages before they cross the Mesh and
+   * to accept gzip-compressed messages addressed to it (additive v1 field).
+   */
+  readonly compress?: boolean
 }
 
 export interface PortalWsResult {
   readonly streamId: number
   readonly protocol?: string
+  /** The daemon agreed to {@link PortalWsParams.compress}. */
+  readonly compressed?: boolean
 }
 
 export interface PairStatusResult {
@@ -416,6 +425,7 @@ export type LocalApiEndpoint =
   | 'device.connect'
   | 'device.disconnect'
   | 'workspaces.refresh'
+  | 'session.archive'
   | 'portal.open'
   | 'portal.close'
   | 'portal.external'

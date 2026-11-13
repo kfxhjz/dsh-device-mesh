@@ -32,29 +32,46 @@ export type ChunkStream = AsyncIterable<Uint8Array>
  * WebSocket opcode, so the portal proxies prepend one application-level kind
  * byte to each message. This keeps the stream flags/protocol version unchanged
  * and lets both ends reconstruct `text` vs `binary` frames exactly.
+ *
+ * Values 2 and 3 are the same opcodes with a gzip-compressed payload. They are
+ * only used after the controller explicitly asks for compression in
+ * `portal.ws.open`, so an older peer never receives an unknown tag.
  */
 export const WsMessageKind = {
   /** Payload is UTF-8 text (`WebSocket#send(string)`). */
   Text: 0,
   /** Payload is an opaque binary frame (`WebSocket#send(Buffer)`). */
   Binary: 1,
+  /** Payload is gzip-compressed text. */
+  CompressedText: 2,
+  /** Payload is gzip-compressed binary. */
+  CompressedBinary: 3,
 } as const
 
 /** Decoded portal WebSocket message. */
 export interface WsMessage {
   readonly kind: 'text' | 'binary'
   readonly payload: Uint8Array
+  /** The payload is still gzip-compressed and must be inflated first. */
+  readonly compressed: boolean
 }
 
 /**
  * Encode one portal WebSocket message: `[kind byte][payload]`.
- * @param payload - raw message bytes.
+ * @param payload - raw message bytes (or gzip bytes when `compressed`).
  * @param kind - `text` or `binary`.
+ * @param compressed - whether `payload` is already gzip-compressed.
  * @returns a new buffer starting with the kind byte.
  */
-export function encodeWsMessage(payload: Uint8Array, kind: 'text' | 'binary'): Uint8Array {
+export function encodeWsMessage(
+  payload: Uint8Array,
+  kind: 'text' | 'binary',
+  compressed = false,
+): Uint8Array {
   const encoded = new Uint8Array(payload.length + 1)
-  encoded[0] = kind === 'text' ? WsMessageKind.Text : WsMessageKind.Binary
+  encoded[0] = kind === 'text'
+    ? (compressed ? WsMessageKind.CompressedText : WsMessageKind.Text)
+    : (compressed ? WsMessageKind.CompressedBinary : WsMessageKind.Binary)
   encoded.set(payload, 1)
   return encoded
 }
@@ -66,13 +83,19 @@ export function encodeWsMessage(payload: Uint8Array, kind: 'text' | 'binary'): U
  * malformed peer cannot crash the proxy; messages produced by
  * {@link encodeWsMessage} always take the tagged path.
  * @param message - encoded message chunk.
- * @returns kind plus a payload view (no copy).
+ * @returns kind, compression flag plus a payload view (no copy).
  */
 export function decodeWsMessage(message: Uint8Array): WsMessage {
   const kind = message[0]
-  if (kind === WsMessageKind.Text) return { kind: 'text', payload: message.subarray(1) }
-  if (kind === WsMessageKind.Binary) return { kind: 'binary', payload: message.subarray(1) }
-  return { kind: 'binary', payload: message }
+  if (kind === WsMessageKind.Text) return { kind: 'text', payload: message.subarray(1), compressed: false }
+  if (kind === WsMessageKind.Binary) return { kind: 'binary', payload: message.subarray(1), compressed: false }
+  if (kind === WsMessageKind.CompressedText) {
+    return { kind: 'text', payload: message.subarray(1), compressed: true }
+  }
+  if (kind === WsMessageKind.CompressedBinary) {
+    return { kind: 'binary', payload: message.subarray(1), compressed: true }
+  }
+  return { kind: 'binary', payload: message, compressed: false }
 }
 
 /**
@@ -103,6 +126,8 @@ export interface HttpExchangeResult extends PortalHttpResult {
 
 export interface WsExchangeResult {
   readonly protocol?: string
+  /** Message payloads may be gzip-compressed; see {@link decodeWsMessage}. */
+  readonly compressed?: boolean
   /**
    * Inbound WebSocket messages, one `Uint8Array` per message. Each chunk is a
    * `[kind byte][payload]` envelope: use {@link decodeWsMessage} to recover the
@@ -191,7 +216,12 @@ export interface DaemonSessionHandlers {
   ws(
     params: Omit<PortalWsParams, 'streamId'>,
     signal: AbortSignal,
-  ): Promise<{ readonly protocol?: string; readonly inbound: ChunkStream; readonly outbound: StreamSink }>
+  ): Promise<{
+    readonly protocol?: string
+    readonly compressed?: boolean
+    readonly inbound: ChunkStream
+    readonly outbound: StreamSink
+  }>
 }
 
 /** Application-authentication outcome for a daemon-side inbound session. */

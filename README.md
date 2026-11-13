@@ -63,9 +63,16 @@ device profile.
   without message contents or secrets.
 - **Local and remote are clearly separated** — a **host switcher above
   Workspaces** shows the current host; selecting a paired host replaces the
-  workspace region with a read-only remote mirror (host name, status, workspaces
-  and sessions), and selecting this host restores the native local tree. The
-  **Devices** panel remains the management surface for pairing and devices.
+  workspace region with a remote mirror (host name, status, workspaces and
+  sessions), and selecting this host restores the native local tree. The
+  mirror has its own **View options** (group by workspace or one list, order by
+  recent activity or title, hide/show/only archived) and per-session
+  **Archive / Unarchive** actions, while the **Devices** panel remains the
+  management surface for pairing and devices.
+- **Compressed remote history** — large `/api/remote.mux` WebSocket messages
+  (session history snapshots, streamed output) are gzipped end to end across the
+  Mesh when both ends support it, so opening a large Session is not limited by
+  transferring multi-megabyte JSON verbatim.
 
 ## Platform matrix
 

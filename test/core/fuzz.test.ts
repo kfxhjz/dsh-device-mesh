@@ -386,7 +386,7 @@ describe('portal WebSocket envelope', () => {
     for (let index = 0; index < 3000; index += 1) {
       const length = index < boundaries.length ? boundaries[index] ?? 0 : rng.int(96)
       const message = rng.bytes(length)
-      if (message.length > 0 && index % 4 === 0) message[0] = rng.int(2)
+      if (message.length > 0 && index % 4 === 0) message[0] = rng.int(4)
       const first = decodeWsMessage(message)
       const second = decodeWsMessage(message)
       assert.deepEqual(first, second, `message #${index} must decode deterministically`)
@@ -394,14 +394,25 @@ describe('portal WebSocket envelope', () => {
       const tag = message[0]
       if (tag === 0) {
         assert.equal(first.kind, 'text')
+        assert.equal(first.compressed, false)
         assert.equal(first.payload.length, message.length - 1)
         assert.deepEqual(first.payload, message.subarray(1))
       } else if (tag === 1) {
         assert.equal(first.kind, 'binary')
+        assert.equal(first.compressed, false)
+        assert.deepEqual(first.payload, message.subarray(1))
+      } else if (tag === 2) {
+        assert.equal(first.kind, 'text')
+        assert.equal(first.compressed, true)
+        assert.deepEqual(first.payload, message.subarray(1))
+      } else if (tag === 3) {
+        assert.equal(first.kind, 'binary')
+        assert.equal(first.compressed, true)
         assert.deepEqual(first.payload, message.subarray(1))
       } else {
         // Absent/unknown kind byte: legacy unframed binary, payload unchanged.
         assert.equal(first.kind, 'binary')
+        assert.equal(first.compressed, false)
         assert.equal(first.payload.length, message.length)
         assert.deepEqual(first.payload, message)
       }
@@ -414,12 +425,15 @@ describe('portal WebSocket envelope', () => {
       const payload = new Uint8Array(length)
       payload.fill(0xa5)
       for (const kind of ['text', 'binary'] as const) {
-        const encoded = encodeWsMessage(payload, kind)
-        assert.equal(encoded.length, length + 1)
-        assert.equal(encoded[0], kind === 'text' ? 0 : 1)
-        const decoded = decodeWsMessage(encoded)
-        assert.equal(decoded.kind, kind)
-        assert.deepEqual(decoded.payload, payload)
+        for (const compressed of [false, true]) {
+          const encoded = encodeWsMessage(payload, kind, compressed)
+          assert.equal(encoded.length, length + 1)
+          assert.equal(encoded[0], (kind === 'text' ? 0 : 1) + (compressed ? 2 : 0))
+          const decoded = decodeWsMessage(encoded)
+          assert.equal(decoded.kind, kind)
+          assert.equal(decoded.compressed, compressed)
+          assert.deepEqual(decoded.payload, payload)
+        }
       }
     }
   })

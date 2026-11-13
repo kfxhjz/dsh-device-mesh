@@ -49,6 +49,12 @@ export interface WebApiBroker {
   connectDevice(deviceId: string): Promise<MeshDeviceView>
   disconnectDevice(deviceId: string): Promise<MeshDeviceView>
   refreshWorkspaces(deviceId?: string): Promise<WorkspacesResult>
+  archiveSession(
+    deviceId: string,
+    sessionId: string,
+    archived: boolean,
+    stopActivity?: boolean,
+  ): Promise<WorkspacesResult>
   openPortal(deviceId: string): Promise<{ readonly url: string }>
   closePortal(deviceId: string): Promise<{ readonly closed: boolean }>
   configureDirect(patch: { readonly enabled?: boolean; readonly port?: number }): Promise<MeshHostState['direct']>
@@ -276,6 +282,16 @@ async function runEndpoint(
         ? payload.deviceId
         : undefined
       return broker.refreshWorkspaces(deviceId)
+    }
+    case 'session.archive': {
+      const deviceId = requireString(payload, 'deviceId')
+      const sessionId = requireString(payload, 'sessionId')
+      return broker.archiveSession(
+        deviceId,
+        sessionId,
+        payload.archived !== false,
+        payload.stopActivity === true,
+      )
     }
     case 'portal.open':
       return broker.openPortal(requireString(payload, 'deviceId'))

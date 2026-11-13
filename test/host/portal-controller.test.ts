@@ -6,10 +6,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
+import { gzipSync, gunzipSync } from 'node:zlib'
+
 import { WebSocket } from 'ws'
 
 import type { WsExchangeResult } from '../../src/shared/mesh-session.ts'
-import { encodeWsMessage } from '../../src/shared/mesh-session.ts'
+import { decodeWsMessage, encodeWsMessage } from '../../src/shared/mesh-session.ts'
 import {
   PortalController,
   injectEmbedShell,
@@ -162,7 +164,7 @@ interface FakeWsExchange {
   endInbound(): void
 }
 
-function fakeWsExchange(options: { protocol?: string } = {}): FakeWsExchange {
+function fakeWsExchange(options: { protocol?: string; compressed?: boolean } = {}): FakeWsExchange {
   const sent: Uint8Array[] = []
   const closes: Array<{ code?: number; reason?: string }> = []
   const aborts: string[] = []
@@ -192,6 +194,7 @@ function fakeWsExchange(options: { protocol?: string } = {}): FakeWsExchange {
   }
   const exchange: WsExchangeResult = {
     ...(options.protocol === undefined ? {} : { protocol: options.protocol }),
+    ...(options.compressed === true ? { compressed: true } : {}),
     messages,
     sink: {
       write: async () => {},
@@ -599,6 +602,60 @@ describe('portal-controller: websocket', () => {
       socket.close()
       await waitFor(() => ws.closes.length > 0)
       assert.equal(session.wsExchanges[0]?.path, '/api/remote.mux')
+    } finally {
+      socket.close()
+      await portal.close()
+    }
+  })
+})
+
+describe('portal-controller: websocket compression', () => {
+  it('gzips large browser frames and inflates compressed remote frames when negotiated', async () => {
+    const ws = fakeWsExchange({ compressed: true })
+    const session = new FakeMeshSession({ ws: async () => ws.exchange })
+    const portal = await PortalController.open({
+      session,
+      deviceId: 'dm_device',
+      token: 'token',
+      idleTimeoutMs: 60_000,
+    })
+    const socket = new WebSocket(`ws://127.0.0.1:${portal.port}/api/remote.mux?token=token`, {
+      origin: `http://127.0.0.1:${portal.port}`,
+    })
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once('open', () =>{  resolve() })
+        socket.once('error', reject)
+      })
+      assert.equal(session.wsExchanges[0]?.compress, true, 'the controller asks for per-exchange gzip')
+
+      const large = 'history-'.repeat(20_000)
+      socket.send(large)
+      await waitFor(() => ws.sent.length === 1)
+      const encoded = decodeWsMessage(ws.sent[0] ?? new Uint8Array())
+      assert.equal(encoded.kind, 'text')
+      assert.equal(encoded.compressed, true, 'a large message must cross the Mesh compressed')
+      assert.equal(gunzipSync(encoded.payload).toString('utf8'), large)
+
+      // A small frame stays raw so gzip's header/footer cannot grow it.
+      socket.send('hi')
+      await waitFor(() => ws.sent.length === 2)
+      const small = decodeWsMessage(ws.sent[1] ?? new Uint8Array())
+      assert.equal(small.compressed, false)
+      assert.equal(Buffer.from(small.payload).toString('utf8'), 'hi')
+
+      // The daemon may compress replies; the controller inflates before handing
+      // the message to the browser.
+      ws.push(encodeWsMessage(gzipSync(Buffer.from('remote-history')), 'text', true))
+      const reply = await new Promise<{ data: unknown; isBinary: boolean }>((resolve, reject) => {
+        const timer = setTimeout(() =>{  reject(new Error('no websocket message')) }, 2_000)
+        socket.once('message', (data: unknown, isBinary: boolean) => {
+          clearTimeout(timer)
+          resolve({ data, isBinary })
+        })
+      })
+      assert.equal(reply.isBinary, false)
+      assert.equal(Buffer.from(reply.data as Buffer).toString('utf8'), 'remote-history')
     } finally {
       socket.close()
       await portal.close()

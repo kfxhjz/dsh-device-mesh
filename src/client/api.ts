@@ -86,6 +86,7 @@ function normalizeWorkspace(value: unknown): WorkspaceSummary | null {
       running: session.running === true,
       awaitingUser: session.awaitingUser === true,
       unread: session.unread === true,
+      ...(session.archived === true ? { archived: true } : {}),
     })).filter(session => session.id.length > 0),
   }
 }
@@ -388,6 +389,31 @@ async function mutate<T>(endpoint: string, payload?: unknown): Promise<T> {
   return value
 }
 
+/**
+ * Publish a fresh remote listing immediately instead of waiting for the next
+ * `state` poll. A failed archive/unarchive already refreshes through
+ * {@link mutate}; this only keeps the successful path snappy.
+ */
+function installRemoteWorkspaces(deviceId: string, result: WorkspacesResult): void {
+  const state = snapshot.state
+  if (state === null) return
+  let changed = false
+  const devices = state.devices.map((device) => {
+    if (device.deviceId !== deviceId) return device
+    changed = true
+    const next: MeshDeviceView = {
+      ...device,
+      remoteWorkspaces: result.workspaces,
+      remoteWorkspacesAt: result.updatedAt,
+    }
+    if (result.truncated === true) return { ...next, remoteWorkspacesTruncated: true }
+    const withoutTruncation = { ...next }
+    delete (withoutTruncation as { remoteWorkspacesTruncated?: boolean }).remoteWorkspacesTruncated
+    return withoutTruncation
+  })
+  if (changed) publish({ ...snapshot, state: { ...state, devices } })
+}
+
 /** Typed wrappers over every endpoint the UI uses. */
 export const meshApi = {
   async ticket(): Promise<PairingTicket> {
@@ -419,10 +445,31 @@ export const meshApi = {
    * omitted (the host caches local results for 60 s; `refresh` bypasses it).
    */
   async refreshWorkspaces(deviceId?: string): Promise<WorkspacesResult> {
-    return normalizeWorkspaces(await mutate<unknown>('workspaces.refresh', {
+    const result = normalizeWorkspaces(await mutate<unknown>('workspaces.refresh', {
       ...(deviceId === undefined ? {} : { deviceId }),
       refresh: true,
     }))
+    if (deviceId !== undefined) installRemoteWorkspaces(deviceId, result)
+    return result
+  },
+  /**
+   * Archive or restore one Session on a paired device. Returns the refreshed
+   * remote listing so the sidebar can update without waiting for the next poll.
+   */
+  async archiveSession(
+    deviceId: string,
+    sessionId: string,
+    archived: boolean,
+    stopActivity = false,
+  ): Promise<WorkspacesResult> {
+    const result = normalizeWorkspaces(await mutate<unknown>('session.archive', {
+      deviceId,
+      sessionId,
+      archived,
+      ...(stopActivity ? { stopActivity: true } : {}),
+    }))
+    installRemoteWorkspaces(deviceId, result)
+    return result
   },
   async openPortalExternally(url: string): Promise<boolean> {
     const result = await mutate<unknown>('portal.external', { url })

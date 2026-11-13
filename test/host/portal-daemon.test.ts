@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
-import { gunzipSync } from 'node:zlib'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, it } from 'node:test'
@@ -346,6 +346,75 @@ describe('portal-daemon: websocket proxy', () => {
       assert.equal(socket.sentRaw[0], '{"ok":true}')
       assert.ok(socket.sentRaw[1] instanceof Uint8Array, 'binary must be sent as bytes')
       assert.deepEqual([...(socket.sentRaw[1])], [1, 2, 3])
+    } finally {
+      daemon.close()
+    }
+  })
+
+  it('gzips large messages only when the controller asks for compression', async () => {
+    const socket = new FakeSocket()
+    const daemon = new PortalDaemon({
+      origin: 'http://127.0.0.1:45678',
+      getService: name => (name === 'connection' ? fakeConnection('http://127.0.0.1:45678') : undefined),
+      fetchImpl: async () => new Response(null, {
+        status: 303,
+        headers: { 'set-cookie': 'dsh-auth-abc123=the-secret-cookie; Max-Age=3600; Path=/' },
+      }),
+      openWebSocket: async () => socket as unknown as PortalWebSocket,
+    })
+    try {
+      const controller = new AbortController()
+      const exchange = await daemon.ws(
+        { path: '/api/remote.mux', headers: {}, compress: true },
+        controller.signal,
+      )
+      assert.equal(exchange.compressed, true)
+      const iterator = exchange.inbound[Symbol.asyncIterator]()
+
+      const large = Buffer.from('history-'.repeat(20_000))
+      socket.emit('message', large, false)
+      const compressed = decodeWsMessage((await iterator.next()).value as Uint8Array)
+      assert.equal(compressed.kind, 'text')
+      assert.equal(compressed.compressed, true)
+      assert.equal(gunzipSync(compressed.payload).toString('utf8'), large.toString('utf8'))
+
+      socket.emit('message', Buffer.from('hi'), false)
+      const small = decodeWsMessage((await iterator.next()).value as Uint8Array)
+      assert.equal(small.compressed, false, 'small frames stay raw')
+      assert.equal(Buffer.from(small.payload).toString('utf8'), 'hi')
+
+      // A compressed message addressed to the daemon is inflated before the
+      // local DSH socket sees it, so the upstream wire format is unchanged.
+      await exchange.outbound.write(encodeWsMessage(gzipSync(Buffer.from('to-dsh')), 'text', true))
+      assert.equal(socket.sentRaw[0], 'to-dsh')
+    } finally {
+      daemon.close()
+    }
+  })
+
+  it('keeps the raw envelope when compression was not negotiated', async () => {
+    const socket = new FakeSocket()
+    const daemon = new PortalDaemon({
+      origin: 'http://127.0.0.1:45678',
+      getService: name => (name === 'connection' ? fakeConnection('http://127.0.0.1:45678') : undefined),
+      fetchImpl: async () => new Response(null, {
+        status: 303,
+        headers: { 'set-cookie': 'dsh-auth-abc123=the-secret-cookie; Max-Age=3600; Path=/' },
+      }),
+      openWebSocket: async () => socket as unknown as PortalWebSocket,
+    })
+    try {
+      const exchange = await daemon.ws({ path: '/api/remote.mux', headers: {} }, new AbortController().signal)
+      assert.equal(exchange.compressed, undefined)
+      const iterator = exchange.inbound[Symbol.asyncIterator]()
+      socket.emit('message', Buffer.from('x'.repeat(4_000)), false)
+      const message = decodeWsMessage((await iterator.next()).value as Uint8Array)
+      assert.equal(message.compressed, false)
+      assert.equal(Buffer.from(message.payload).toString('utf8'), 'x'.repeat(4_000))
+      await assert.rejects(
+        () => exchange.outbound.write(encodeWsMessage(gzipSync(Buffer.from('bomb')), 'text', true)),
+        (error: unknown) => error instanceof MeshRpcError && error.code === 'mesh/bad-request',
+      )
     } finally {
       daemon.close()
     }
