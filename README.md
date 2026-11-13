@@ -13,7 +13,7 @@ one-time pairing, any paired device can open another device's full DSH Web UI â€
 conversations, approvals, terminal, files and settings â€” as if you were sitting
 in front of it.
 
-> Status: developer preview (`v0.1.4`), targeting DSH `0.2.2-rc.2`.
+> Status: developer preview (`v0.1.5`), targeting DSH `0.2.2-rc.2`.
 > Design and security model: [docs/DESIGN.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/DESIGN.md).
 > Wire protocol: [docs/PROTOCOL.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/PROTOCOL.md).
 

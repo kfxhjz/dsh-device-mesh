@@ -1,7 +1,7 @@
 # Development and Maintenance Guide
 [简体中文](zh/development.zh.md) | English
 
-Status: applies to plugin `0.1.4` against DSH `0.2.2-rc.2`. This guide is for people who build, extend, review
+Status: applies to plugin `0.1.5` against DSH `0.2.2-rc.2`. This guide is for people who build, extend, review
 or release the plugin. It covers the repository layout, DSH packaging and client-bundle contracts, the local
 loop, host and UI integration seams, testing, debugging and releases.
 

@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.1.5 - 2026-11-13
+
+### Fixed
+
+- A cancelled transport dial can no longer take the whole DSH host down.
+  Aborting a WebSocket while its handshake was still pending made `ws` emit an
+  asynchronous `error` ("WebSocket was closed before the connection was
+  established") after the connector had already removed its listener, so Node
+  raised it as an uncaught exception. Every socket now keeps an error sink until
+  it is gone: a dial cancelled by a pairing/connect timeout, a heartbeat-driven
+  reconnect or shutdown simply rejects that attempt. The contract lives in
+  `terminateQuietly()`, and both the direct and relay carriers use it on every
+  abandon path.
+
 ## 0.1.4 - 2026-11-13
 
 ### Added

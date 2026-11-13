@@ -1,6 +1,6 @@
 {
   "name": "dsh-device-mesh",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "DSH device mesh: pair your DSH devices and control them remotely over LAN/Tailscale or a paseo-relay public channel",
   "license": "MIT",
   "publishConfig": {

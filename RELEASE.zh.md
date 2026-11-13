@@ -74,7 +74,7 @@ E2E 可选环境变量：
 - [ ] `npm pack` 产物装进临时 `DSH_HOME` 并成功启动一次：
 
   ```sh
-  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.1.4.tgz
+  DSH_HOME=$(mktemp -d) dsh plugin --profile web add ./dsh-device-mesh-0.1.5.tgz
   DSH_HOME=... dsh web --no-open --port 0
   ```
 

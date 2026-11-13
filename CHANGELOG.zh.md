@@ -9,6 +9,18 @@
 
 ## Unreleased
 
+## 0.1.5 - 2026-11-13
+
+### 修复（Fixed）
+
+- 传输拨号被取消时不再导致整个 DSH 宿主崩溃。当握手尚未完成时中止
+  WebSocket，`ws` 会在连接器已经移除监听器之后异步抛出
+  `error`（“WebSocket was closed before the connection was established”），
+  Node 于是把它当作未捕获异常并退出进程。现在每个 socket 在彻底消失前都保留
+  一个 error 接收器：由配对/连接超时、心跳触发的重连或关停取消的拨号只会让该次
+  尝试被拒绝。该约定集中在 `terminateQuietly()` 中，direct 与 relay 两条传输链
+  的所有放弃路径都已改用它。
+
 ## 0.1.4 - 2026-11-13
 
 ### 新增（Added）
