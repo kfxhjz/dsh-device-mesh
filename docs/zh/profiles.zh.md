@@ -50,7 +50,7 @@ dsh plugin --profile web add dsh-device-mesh
 dsh plugin --profile edge add dsh-device-mesh
 
 # 从预构建 tarball 安装（代替 npm）
-dsh plugin --profile desktop add ./dsh-device-mesh-0.1.2.tgz
+dsh plugin --profile desktop add ./dsh-device-mesh-0.1.3.tgz
 ```
 
 `dsh plugin` 把 profile 参数之后的全部参数转发给 profile 目录里的 pnpm，因此

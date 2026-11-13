@@ -9,6 +9,8 @@
 
 ## Unreleased
 
+## 0.1.3 - 2026-11-13
+
 ### 新增（Added）
 
 - 远程工作区镜像新增**视图选项**：可按工作区分组或合并为单列表、按最近更新或
@@ -271,7 +273,8 @@
 - Transport 套件覆盖直连往返、限制和 Origin 检查，以及针对真实 relay 二进制和 mock relay 的 paseo-relay v1/v2 行为。
 - 端到端套件使用真实 `dsh web` 实例：插件加载与 client bundle 出现在启动图中、两台设备通过 SAS 批准和 portal 完成直连配对，以及在关闭直连监听的情况下完成仅中继的配对/portal 运行。
 
-[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.3
 [0.1.2]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.2
 [0.1.1]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.0

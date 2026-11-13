@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.1.3 - 2026-11-13
+
 ### Added
 
 - The remote workspace mirror now has a **View options** menu: group by
@@ -388,7 +390,8 @@ First MVP release, verified against DSH `0.2.2-rc.1`.
   in the boot graph, two-device direct pairing through SAS approval and portal,
   and a relay-only pairing/portal run with direct listeners disabled.
 
-[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/kfxhjz/dsh-device-mesh/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.3
 [0.1.2]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.2
 [0.1.1]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kfxhjz/dsh-device-mesh/releases/tag/v0.1.0

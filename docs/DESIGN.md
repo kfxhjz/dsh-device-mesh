@@ -1,7 +1,7 @@
 # DSH Device Mesh — Architecture and Security Design
 [简体中文](zh/DESIGN.zh.md) | English
 
-Status: **developer preview** (plugin `0.1.2`, targeting DSH `0.2.2-rc.2`). The wire contract is
+Status: **developer preview** (plugin `0.1.3`, targeting DSH `0.2.2-rc.2`). The wire contract is
 normative in [PROTOCOL.md](PROTOCOL.md); this document explains why the system is
 built this way, where its boundaries are, and how it evolves.
 

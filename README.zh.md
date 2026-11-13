@@ -10,7 +10,7 @@
 
 把多台 **DeepSeek Harness (DSH)** 设备配成一个设备网格。配对一次之后，任意一台已配对设备都可以打开另一台设备的完整 DSH Web UI——对话、审批、终端、文件和设置——就像坐在那台机器前一样。
 
-> 状态：开发者预览（`v0.1.2`），面向 DSH `0.2.2-rc.2`。
+> 状态：开发者预览（`v0.1.3`），面向 DSH `0.2.2-rc.2`。
 > 架构与安全模型：[docs/zh/DESIGN.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/zh/DESIGN.zh.md)。
 > 线上协议：[docs/zh/PROTOCOL.zh.md](https://github.com/kfxhjz/dsh-device-mesh/blob/main/docs/zh/PROTOCOL.zh.md)。
 
