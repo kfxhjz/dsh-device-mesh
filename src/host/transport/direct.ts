@@ -24,7 +24,15 @@ import type {
   DirectOptions,
   MeshTransport,
 } from '../../shared/transport.ts'
-import { abortError, logDebug, logWarn, MAX_WS_PAYLOAD_BYTES, openWebSocket, WebSocketMeshTransport } from './common.ts'
+import {
+  abortError,
+  logDebug,
+  logWarn,
+  MAX_WS_PAYLOAD_BYTES,
+  openWebSocket,
+  terminateQuietly,
+  WebSocketMeshTransport,
+} from './common.ts'
 import type { TransportLogger } from './common.ts'
 
 /** HTTP path every direct endpoint serves. */
@@ -465,7 +473,7 @@ export async function connectDirect(
     ...(options.logger ? { logger: options.logger } : {}),
   })
   if (options.signal?.aborted) {
-    ws.terminate()
+    terminateQuietly(ws)
     throw abortError()
   }
   return new WebSocketMeshTransport(ws, {

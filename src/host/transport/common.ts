@@ -167,9 +167,28 @@ export interface OpenWebSocketOptions {
 }
 
 /**
+ * Terminate a socket without ever letting the resulting `error` event become
+ * uncaught. `ws` aborts a pending handshake by emitting `error` on the next
+ * tick ("WebSocket was closed before the connection was established"), so a
+ * listener must already be attached when `terminate()` runs. A socket that is
+ * still CONNECTING has no owner yet; without this sink that event kills the
+ * whole host process.
+ */
+export function terminateQuietly(ws: WebSocket): void {
+  if (ws.listenerCount('error') === 0) ws.on('error', () => {})
+  try {
+    ws.terminate()
+  } catch {
+    // Already gone.
+  }
+}
+
+/**
  * Open a client WebSocket and resolve once the handshake completed. Rejects on
- * transport error, non-101 HTTP status, abort, or handshake timeout. The
- * returned socket has no `error` listener yet; the caller must attach one.
+ * transport error, non-101 HTTP status, abort, or handshake timeout. A sink
+ * `error` listener stays attached for the socket's lifetime so an abandoned
+ * handshake can never surface as an uncaught exception; the caller should
+ * still attach its own listener for diagnostics.
  */
 export function openWebSocket(options: OpenWebSocketOptions): Promise<WebSocket> {
   return new Promise<WebSocket>((resolve, reject) => {
@@ -199,19 +218,16 @@ export function openWebSocket(options: OpenWebSocketOptions): Promise<WebSocket>
     let settled = false
     const cleanup = (): void => {
       ws.off('open', onOpen)
-      ws.off('error', onError)
       ws.off('unexpected-response', onUnexpectedResponse)
       signal?.removeEventListener('abort', onAbort)
+      // Keep `onError` attached: aborting a CONNECTING socket emits `error`
+      // asynchronously, and an unhandled event here would take down the host.
     }
     const fail = (error: Error): void => {
       if (settled) return
       settled = true
       cleanup()
-      try {
-        ws.terminate()
-      } catch {
-        // Already dead.
-      }
+      terminateQuietly(ws)
       reject(error)
     }
     const onOpen = (): void => {
@@ -221,6 +237,7 @@ export function openWebSocket(options: OpenWebSocketOptions): Promise<WebSocket>
       resolve(ws)
     }
     const onError = (error: Error): void => {
+      if (settled) return
       fail(sanitizeConnectError(error, options.secret))
     }
     const onUnexpectedResponse = (
@@ -373,18 +390,14 @@ export class WebSocketMeshTransport implements MeshTransport {
     }
     // Do not let a peer that never answers the close handshake keep us alive.
     const timer = setTimeout(() => {
-      if (!this.closeInfo) this.ws.terminate()
+      if (!this.closeInfo) this.terminate()
     }, 2_000)
     timer.unref?.()
   }
 
   /** Drop the socket without a close handshake (heartbeat death, shutdown). */
   terminate(): void {
-    try {
-      this.ws.terminate()
-    } catch {
-      // Already gone.
-    }
+    terminateQuietly(this.ws)
   }
 
   private readonly handleMessage = (data: RawData, isBinary: boolean): void => {

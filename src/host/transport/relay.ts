@@ -17,7 +17,17 @@ import type {
   RelayDaemonOptions,
   TransportCloseInfo,
 } from '../../shared/transport.ts'
-import { abortError, delay, logDebug, logInfo, logWarn, MAX_WS_PAYLOAD_BYTES, openWebSocket, WebSocketMeshTransport } from './common.ts'
+import {
+  abortError,
+  delay,
+  logDebug,
+  logInfo,
+  logWarn,
+  MAX_WS_PAYLOAD_BYTES,
+  openWebSocket,
+  terminateQuietly,
+  WebSocketMeshTransport,
+} from './common.ts'
 import type { TransportLogger } from './common.ts'
 
 /** WS ping interval for control and data sockets. */
@@ -136,7 +146,7 @@ export async function connectRelayClient(
     ...(options.logger ? { logger: options.logger } : {}),
   })
   if (options.signal?.aborted) {
-    ws.terminate()
+    terminateQuietly(ws)
     throw abortError()
   }
   const relayHost = new URL(options.url).host
@@ -346,7 +356,7 @@ class RelayDaemonV2Impl extends RelayDaemonBase {
         this.logger,
         `relay control upgrade rejected with HTTP ${response.statusCode ?? 0}`,
       )
-      ws.terminate()
+      terminateQuietly(ws)
     })
     ws.on('error', () => {
       // The close event that follows carries the lifecycle decision.
@@ -679,11 +689,7 @@ function safeClose(ws: WebSocket, code: number, reason: string): void {
 }
 
 function safeTerminate(ws: WebSocket): void {
-  try {
-    ws.terminate()
-  } catch {
-    // Already gone.
-  }
+  terminateQuietly(ws)
 }
 
 // ---------------------------------------------------------------------------
