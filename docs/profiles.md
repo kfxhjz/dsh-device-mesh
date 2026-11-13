@@ -54,7 +54,7 @@ dsh plugin --profile web add dsh-device-mesh
 dsh plugin --profile edge add dsh-device-mesh
 
 # Prebuilt tarball instead of npm
-dsh plugin --profile desktop add ./dsh-device-mesh-0.1.3.tgz
+dsh plugin --profile desktop add ./dsh-device-mesh-0.1.4.tgz
 ```
 
 `dsh plugin` forwards everything after the profile flag to pnpm in the profile
