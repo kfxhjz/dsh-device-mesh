@@ -9,7 +9,9 @@ import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import test from 'node:test'
 import { chromium } from 'playwright-core'
-import { createHomes, ensureBuilt, startInstance } from './helpers/dsh-instance.ts'
+import { generateDeviceIdentity } from '../../src/host/crypto.ts'
+import { createPairingTicket } from '../../src/host/pairing.ts'
+import { createHomes, ensureBuilt, startInstance, waitFor } from './helpers/dsh-instance.ts'
 
 const CHROME_CANDIDATES = [
   process.env.CHROME_PATH,
@@ -112,9 +114,44 @@ test('the host switcher and add-host dialog work in the real DSH UI', { timeout:
   // One pairing surface: paste a link or scan the controller QR.
   await page.getByPlaceholder(/dsh-mesh:\/\/pair|粘贴|paste/iu).first()
     .waitFor({ state: 'visible', timeout: 10_000 })
-  await page.getByRole('button', { name: /开始配对|Start pairing/u }).first()
-    .waitFor({ state: 'visible', timeout: 10_000 })
+  const startPairing = page.getByRole('button', { name: /开始配对|Start pairing/u }).first()
+  await startPairing.waitFor({ state: 'visible', timeout: 10_000 })
   assert.equal(await page.getByText(/远程 SSH|Remote SSH/u).count(), 0)
+
+  // A ticket that advertises a plaintext non-loopback relay must warn first and
+  // only pin the peer after the explicit confirmation.
+  const plainRelay = 'ws://192.0.2.1:8411/ws'
+  const plainTicket = createPairingTicket({
+    identity: generateDeviceIdentity({ name: 'Plain relay peer' }),
+    endpoints: [{ k: 'relay', url: plainRelay, sid: 'plain-relay-test', v: 2 }],
+    token: Buffer.alloc(32, 11).toString('base64url'),
+    now: Date.now(),
+  })
+  const linkField = page.getByPlaceholder(/dsh-mesh:\/\/pair|粘贴|paste/iu).first()
+  await linkField.fill(plainTicket.link)
+  await startPairing.click()
+  const warning = page.getByRole('dialog', { name: /中继使用明文连接|Relay is not encrypted/u })
+  await warning.waitFor({ state: 'visible', timeout: 10_000 })
+  assert.ok(
+    (await warning.innerText()).includes(plainRelay),
+    'the warning must list the plaintext relay URL',
+  )
+  // Cancel must leave nothing pinned.
+  await warning.getByRole('button', { name: /^(取消|Cancel)$/u }).click()
+  await warning.waitFor({ state: 'hidden', timeout: 5_000 })
+  const afterCancel = await instance.api<{ devices: unknown[] }>('state')
+  assert.equal(afterCancel.devices.length, 0, 'cancelling the warning must not pin the peer')
+
+  // Confirming is the only path that starts the pairing.
+  await startPairing.click()
+  const warningAgain = page.getByRole('dialog', { name: /中继使用明文连接|Relay is not encrypted/u })
+  await warningAgain.waitFor({ state: 'visible', timeout: 10_000 })
+  await warningAgain.getByRole('button', { name: /仍然继续|Continue anyway/u }).click()
+  await waitFor(
+    async () => (await instance.api<{ devices: unknown[] }>('state')).devices.length === 1,
+    10_000,
+    () => `confirming the warning did not pin the plaintext-relay peer\n${instance.logs()}`,
+  )
   await page.screenshot({ path: '.test/e2e/evidence/devices-host-switcher.png', fullPage: true }).catch(() => undefined)
   assert.deepEqual(failures, [], `the panel reported runtime errors: ${failures.join(' | ')}`)
 })

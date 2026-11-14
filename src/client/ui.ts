@@ -158,6 +158,8 @@ export interface ButtonOptions {
   readonly variant?: 'default' | 'primary' | 'danger' | 'ghost'
   readonly small?: boolean
   readonly type?: 'button' | 'submit'
+  /** Focus this control when it mounts (confirmation dialogs). */
+  readonly autoFocus?: boolean
 }
 
 /** Themed button with a guaranteed ≥40px touch target. */
@@ -178,6 +180,7 @@ export function Button(options: ButtonOptions): UiChild {
       title: options.title,
       'aria-label': options.ariaLabel,
       'aria-busy': options.busy === true ? 'true' : undefined,
+      autoFocus: options.autoFocus === true ? true : undefined,
       onClick: options.onClick,
       key: undefined,
     },

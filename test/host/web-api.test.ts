@@ -5,6 +5,7 @@ import type {
   AuditEntry,
   MeshDeviceView,
   MeshHostState,
+  PairingLinkInspection,
   PairingScope,
   WorkspacesResult,
 } from '../../src/shared/protocol.ts'
@@ -65,8 +66,22 @@ class FakeBroker implements WebApiBroker {
     return { link: 'dsh-mesh://pair?d=abc', expiresAt: '2026-01-01T00:10:00.000Z' }
   }
 
-  async pairWithLink(link: string): Promise<MeshDeviceView> {
-    this.record('pairWithLink', link)
+  inspectPairingLink(link: string): PairingLinkInspection {
+    this.record('inspectPairingLink', link)
+    return {
+      deviceId: DEVICE.deviceId,
+      name: DEVICE.name,
+      platform: DEVICE.platform,
+      endpoints: ['ws://192.0.2.1:45871/mesh'],
+      insecureEndpoints: ['ws://192.0.2.1:45871/relay'],
+    }
+  }
+
+  async pairWithLink(
+    link: string,
+    options?: { readonly confirmInsecure?: boolean },
+  ): Promise<MeshDeviceView> {
+    this.record('pairWithLink', link, options)
     return DEVICE
   }
 
@@ -186,12 +201,53 @@ describe('web-api: endpoints', () => {
       assert.equal(value.deviceId, DEVICE.deviceId)
       assert.equal(value.device.name, 'Peer')
     }
-    assert.deepEqual(broker.calls[0], { name: 'pairWithLink', args: ['dsh-mesh://pair?d=abc'] })
+    assert.deepEqual(broker.calls[0], {
+      name: 'pairWithLink',
+      args: ['dsh-mesh://pair?d=abc', { confirmInsecure: false }],
+    })
+  })
+
+  it('forwards the plaintext relay confirmation to the broker', async () => {
+    const broker = new FakeBroker()
+    const result = await dispatchLocalApi(broker, {
+      endpoint: 'pair.complete',
+      payload: { link: 'dsh-mesh://pair?d=abc', confirmInsecure: true },
+    })
+    assert.equal(result.ok, true)
+    assert.deepEqual(broker.calls[0], {
+      name: 'pairWithLink',
+      args: ['dsh-mesh://pair?d=abc', { confirmInsecure: true }],
+    })
+  })
+
+  it('returns the pairing preflight without pinning the peer', async () => {
+    const broker = new FakeBroker()
+    const result = await dispatchLocalApi(broker, {
+      endpoint: 'pair.inspect',
+      payload: { link: 'dsh-mesh://pair?d=abc' },
+    })
+    assert.equal(result.ok, true)
+    if (result.ok) {
+      assert.deepEqual(result.value, {
+        deviceId: DEVICE.deviceId,
+        name: DEVICE.name,
+        platform: DEVICE.platform,
+        endpoints: ['ws://192.0.2.1:45871/mesh'],
+        insecureEndpoints: ['ws://192.0.2.1:45871/relay'],
+      })
+    }
+    assert.deepEqual(broker.calls[0], { name: 'inspectPairingLink', args: ['dsh-mesh://pair?d=abc'] })
   })
 
   it('routes every documented endpoint to the broker', async () => {
     const broker = new FakeBroker()
     const cases: Array<{ endpoint: string; payload?: unknown; name: string; args: unknown[] }> = [
+      {
+        endpoint: 'pair.inspect',
+        payload: { link: 'dsh-mesh://pair?d=abc' },
+        name: 'inspectPairingLink',
+        args: ['dsh-mesh://pair?d=abc'],
+      },
       { endpoint: 'pair.approve', payload: { requestId: 'r1' }, name: 'approvePairing', args: ['r1', undefined] },
       { endpoint: 'pair.deny', payload: { requestId: 'r2' }, name: 'denyPairing', args: ['r2'] },
       { endpoint: 'pair.approve', payload: { requestId: 'r3', approved: false }, name: 'denyPairing', args: ['r3'] },
@@ -273,7 +329,7 @@ describe('web-api: validation and errors', () => {
 
   it('validates required payload fields', async () => {
     const broker = new FakeBroker()
-    for (const endpoint of ['pair.complete', 'pair.approve', 'device.connect', 'portal.open', 'peer.revoke']) {
+    for (const endpoint of ['pair.inspect', 'pair.complete', 'pair.approve', 'device.connect', 'portal.open', 'peer.revoke']) {
       const result = await dispatchLocalApi(broker, { endpoint, payload: {} })
       assert.equal(result.ok, false, `${endpoint} should require payload`)
       if (!result.ok) assert.equal(result.error.code, 'mesh/bad-request')
@@ -283,6 +339,15 @@ describe('web-api: validation and errors', () => {
       payload: { port: 70000 },
     })
     assert.equal(badPort.ok, false)
+    // A non-boolean confirmation must be rejected, not coerced to "false" and
+    // turned into the generic pairing error.
+    const badConfirm = await dispatchLocalApi(broker, {
+      endpoint: 'pair.complete',
+      payload: { link: 'dsh-mesh://pair?d=abc', confirmInsecure: 'yes' },
+    })
+    assert.equal(badConfirm.ok, false)
+    if (!badConfirm.ok) assert.equal(badConfirm.error.code, 'mesh/bad-request')
+    assert.equal(broker.calls.length, 0, 'a malformed confirmation must not reach the broker')
   })
 
   it('rejects restricted pairing scopes before calling the broker', async () => {

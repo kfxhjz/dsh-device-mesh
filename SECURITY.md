@@ -158,7 +158,11 @@ reasonable window (typically 90 days) before public disclosure.
 - **Plaintext relay opt-in.** The relay field defaults to `wss://`. Turning
   **Use TLS** off accepts a public `ws://` endpoint only as an explicit user
   choice; the relay then sees control metadata and can tamper with frames. Use
-  it only on trusted networks and never for a public deployment.
+  it only on trusted networks and never for a public deployment. On the pairing
+  side the same choice is explicit: a ticket that advertises a plaintext
+  non-loopback relay is inspected by the Host and rejected by `pair.complete`
+  unless the UI's second confirmation set `confirmInsecure`, so a link alone
+  cannot silently downgrade the controller.
 - **Connection churn:** the direct listener accepts at most 60 upgrade attempts
   per IP per minute (429 after that) and caps 16 live connections, half per IP.
   Keep the direct port on trusted networks or behind a firewall; use the relay

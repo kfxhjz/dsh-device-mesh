@@ -479,7 +479,8 @@ paseo-relay v0.1.2 协议，可能随部署的 relay 版本变化。
 | 关闭码 `1013` | 无 data route / 预算 / 慢消费者 | 通常是瞬时的：data socket 尚未 attach、准入预算耗尽或 writer 队列已满。退避重试；持续 `1013` 是容量/准入问题，不是协议错误。 |
 
 - **公网必须 TLS。** relay 部署只暴露 `wss://` 并配置 origin 白名单；`ws://`
-  仅用于本机测试。
+  仅用于本机测试。配对票据若宣传非回环明文 relay 仍可被接受，但必须先经过
+  controller 端的显式确认（§9.11）。
 - **relay 不认证任何人。** E2EE 与一次性配对就是认证层，不是纵深防御。relay 能看到
   路由元数据、帧大小与时序，也能丢弃、延迟或替换关闭码；它不是可靠消息总线，不提供
   可用性保证。
@@ -517,8 +518,11 @@ paseo-relay v0.1.2 协议，可能随部署的 relay 版本变化。
    `info.protocol === 1`。
 10. **最小可信代码**：传输只用 `ws`；Ed25519、X25519、SHA-256、HKDF 使用
     `node:crypto`；ChaCha20-Poly1305 使用 `@noble/ciphers`；不手写密码学原语。
-11. **relay TLS**：非回环 relay 端点必须使用 `wss://`；host 会拒绝非回环主机的明文
-    `ws://` 端点。`ws://` 仅允许用于绑定回环地址的本地测试 relay。
+11. **relay TLS**：relay 应使用 `wss://`，明文 `ws://` 只对绑定回环地址的 relay 安全。
+    配对票据仍可能宣传非回环主机的明文 `ws://` relay（例如私有测试部署）：controller
+    可以解析它，但 `pair.inspect` 会返回受影响的 URL，且 `pair.complete` 在调用方未传
+    `confirmInsecure: true` 时以 `mesh/insecure-transport` 失败；UI 只会在显式警告后
+    设置该标志。无论哪种方式 Mesh 会话本身都保持加密，但 relay 能读取路由元数据并篡改帧。
 
 ## 10. 版本与兼容
 

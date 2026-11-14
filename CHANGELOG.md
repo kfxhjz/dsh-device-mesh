@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- A pairing ticket that advertises a plaintext `ws://` relay on a non-loopback
+  host no longer fails with "pairing ticket relay endpoint must use wss:// for
+  non-loopback hosts". The controller preflights the link through the new
+  `pair.inspect` endpoint and shows a second, explicit confirmation listing the
+  affected relay URLs; only then does `pair.complete` send
+  `confirmInsecure: true`. Loopback `ws://` and `wss://` tickets pair exactly as
+  before, and a programmatic caller still fails closed with
+  `mesh/insecure-transport` until it confirms.
+
 ## 0.1.5 - 2026-11-13
 
 ### Fixed

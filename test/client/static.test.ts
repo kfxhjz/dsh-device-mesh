@@ -124,6 +124,7 @@ test('talks to the local Host API with the documented endpoints', () => {
   for (const endpoint of [
     'state',
     'pair.ticket',
+    'pair.inspect',
     'pair.complete',
     'pair.approve',
     'pair.deny',

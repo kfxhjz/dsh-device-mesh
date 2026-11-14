@@ -9,6 +9,15 @@
 
 ## Unreleased
 
+### 变更（Changed）
+
+- 当配对票据宣传非回环主机的明文 `ws://` relay 时，不再以
+  “pairing ticket relay endpoint must use wss:// for non-loopback hosts” 失败。
+  controller 会先通过新增的 `pair.inspect` 预检链接，并弹出二次确认，列出受影响的
+  relay URL；只有确认后 `pair.complete` 才会带上 `confirmInsecure: true`。回环
+  `ws://` 与 `wss://` 票据的配对流程保持不变；编程调用方在确认前仍会以
+  `mesh/insecure-transport` 失败关闭。
+
 ## 0.1.5 - 2026-11-13
 
 ### 修复（Fixed）

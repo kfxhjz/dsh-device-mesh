@@ -20,6 +20,7 @@ import type {
   LocalApiResult,
   MeshDeviceView,
   MeshHostState,
+  PairingLinkInspection,
   PairingScope,
   PairingTicketView,
   WorkspacesResult,
@@ -37,7 +38,11 @@ const MAX_ENVELOPE_BYTES = 64 * 1024
 export interface WebApiBroker {
   state(): MeshHostState
   createPairingTicket(): Promise<{ readonly link: string; readonly expiresAt: string }>
-  pairWithLink(link: string): Promise<MeshDeviceView>
+  inspectPairingLink(link: string): PairingLinkInspection
+  pairWithLink(
+    link: string,
+    options?: { readonly confirmInsecure?: boolean },
+  ): Promise<MeshDeviceView>
   approvePairing(
     requestId: string,
     scope?: PairingScope,
@@ -241,9 +246,16 @@ async function runEndpoint(
       }
       return view
     }
+    case 'pair.inspect':
+      return broker.inspectPairingLink(requireString(payload, 'link'))
     case 'pair.complete': {
       const link = requireString(payload, 'link')
-      const device = await broker.pairWithLink(link)
+      // `confirmInsecure` is only ever set by the local UI after its explicit
+      // plaintext-relay warning; the broker re-checks the ticket either way.
+      // Validate the type like every other optional payload field instead of
+      // silently coercing a malformed value to "not confirmed".
+      const confirmInsecure = optionalBoolean(payload, 'confirmInsecure') ?? false
+      const device = await broker.pairWithLink(link, { confirmInsecure })
       // Non-blocking contract: the ticket is pinned immediately and the
       // connection/approval progresses in the background (`state` shows it).
       return {

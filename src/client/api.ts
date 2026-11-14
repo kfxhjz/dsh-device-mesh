@@ -11,6 +11,7 @@
 import type {
   MeshDeviceView,
   MeshHostState,
+  PairingLinkInspection,
   PairingRequest,
   PairingScope,
   WorkspaceSummary,
@@ -207,6 +208,27 @@ export function normalizeTicket(value: unknown): PairingTicket {
     link,
     expiresAt: text(raw.expiresAt),
     ...(optionalText(raw.qrSvg) === undefined ? {} : { qrSvg: optionalText(raw.qrSvg) as string }),
+  }
+}
+
+/**
+ * Normalize `pair.inspect`.
+ *
+ * The preflight only drives the plaintext-relay warning, so unknown fields
+ * degrade to empty values instead of failing the paste path; `pair.complete`
+ * still verifies the ticket in the Host.
+ */
+export function normalizePairingInspection(value: unknown): PairingLinkInspection {
+  const raw = isRecord(value) ? value : {}
+  const urls = (input: unknown): string[] => Array.isArray(input)
+    ? input.filter((url): url is string => typeof url === 'string' && url.length > 0)
+    : []
+  return {
+    deviceId: text(raw.deviceId),
+    name: text(raw.name),
+    platform: platformOf(raw.platform),
+    endpoints: urls(raw.endpoints),
+    insecureEndpoints: urls(raw.insecureEndpoints),
   }
 }
 
@@ -419,8 +441,24 @@ export const meshApi = {
   async ticket(): Promise<PairingTicket> {
     return normalizeTicket(await callEndpoint<unknown>('pair.ticket'))
   },
-  async completePairing(link: string): Promise<PairedDeviceResult> {
-    return normalizePairedDevice(await mutate<unknown>('pair.complete', { link }))
+  /**
+   * Preflight a pairing link without pinning the peer.
+   *
+   * Used to detect a plaintext relay before the dialog shows its explicit
+   * confirmation; no peer record is created by this call.
+   */
+  async inspectPairing(link: string): Promise<PairingLinkInspection> {
+    return normalizePairingInspection(await callEndpoint<unknown>('pair.inspect', { link }))
+  },
+  /** Complete pairing; `confirmInsecure` is set only after the user's warning. */
+  async completePairing(
+    link: string,
+    options: { readonly confirmInsecure?: boolean } = {},
+  ): Promise<PairedDeviceResult> {
+    return normalizePairedDevice(await mutate<unknown>('pair.complete', {
+      link,
+      ...(options.confirmInsecure === true ? { confirmInsecure: true } : {}),
+    }))
   },
   async approvePairing(requestId: string, scope?: PairingScope): Promise<void> {
     await mutate<unknown>('pair.approve', scope === undefined ? { requestId } : { requestId, scope })

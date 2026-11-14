@@ -502,6 +502,8 @@ protocol and may change with the deployed relay version.
 
 - **TLS is mandatory in public.** A relay deployment exposes `wss://` only, with
   the relay origin allowlist configured; plain `ws://` is for loopback testing.
+  A pairing ticket that advertises a plaintext non-loopback relay is still
+  accepted, but only after an explicit controller-side confirmation (§9.11).
 - **The relay authenticates nobody.** E2EE and one-time pairing are the
   authentication layer, not defense in depth. The relay sees routing metadata,
   frame sizes and timing, and can drop, delay or replace close codes; it is not a
@@ -548,9 +550,14 @@ protocol and may change with the deployed relay version.
 10. **Minimal trusted code.** Transport uses `ws`; Ed25519, X25519, SHA-256 and
     HKDF use `node:crypto`; ChaCha20-Poly1305 uses `@noble/ciphers`. No primitive
     is implemented by hand.
-11. **Relay TLS.** A non-loopback relay endpoint must be `wss://`; the host
-    rejects a plain `ws://` endpoint for non-loopback hosts. `ws://` is accepted
-    only for a relay bound to loopback for local testing.
+11. **Relay TLS.** A relay is expected to use `wss://`, and `ws://` is only safe
+    for a relay bound to loopback. A pairing ticket may still advertise a
+    plaintext `ws://` relay on a non-loopback host (for example a private
+    test deployment). The controller parses it, but `pair.inspect` reports the
+    affected URLs and `pair.complete` fails with `mesh/insecure-transport`
+    unless the caller passes `confirmInsecure: true`; the UI sets that flag only
+    after an explicit warning. The Mesh session stays encrypted either way, but
+    the relay can read routing metadata and tamper with frames.
 
 ## 10. Versioning and compatibility
 - The wire version is **1** (`PROTOCOL_VERSION`); incompatible changes bump it.

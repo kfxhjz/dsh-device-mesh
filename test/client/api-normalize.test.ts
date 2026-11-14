@@ -6,6 +6,7 @@ import {
   extractPairingLink,
   normalizeDevice,
   normalizePairedDevice,
+  normalizePairingInspection,
   normalizePortalUrl,
   normalizeState,
   normalizeTicket,
@@ -170,6 +171,28 @@ describe('api: pairing payload normalization', () => {
     assert.equal(bare.deviceId, 'd2')
     assert.equal(bare.pairing, false)
     assert.equal(bare.device.deviceId, 'd2')
+  })
+
+  it('normalizes the pairing preflight and drops malformed URLs', () => {
+    const inspection = normalizePairingInspection({
+      deviceId: 'd1',
+      name: 'Daemon',
+      platform: 'linux',
+      endpoints: ['ws://192.0.2.1:45871/mesh', '', 7],
+      insecureEndpoints: ['ws://relay.example.com/ws'],
+    })
+    assert.equal(inspection.deviceId, 'd1')
+    assert.equal(inspection.name, 'Daemon')
+    assert.equal(inspection.platform, 'linux')
+    assert.deepEqual(inspection.endpoints, ['ws://192.0.2.1:45871/mesh'])
+    assert.deepEqual(inspection.insecureEndpoints, ['ws://relay.example.com/ws'])
+    assert.deepEqual(normalizePairingInspection(undefined), {
+      deviceId: '',
+      name: '',
+      platform: 'unknown',
+      endpoints: [],
+      insecureEndpoints: [],
+    })
   })
 
   it('extracts one pairing link from pasted or scanned text', () => {

@@ -12,6 +12,7 @@ import {
   Button, CloseGlyph, IconButton, ScanGlyph, Spinner, describeError, describeStatusDetail, el, formatSas,
   platformLabel, translateOf,
 } from './ui.js'
+import type { UiChild } from './ui.js'
 
 interface PairingActionState {
   readonly busyId: string | null
@@ -159,6 +160,52 @@ function barcodeDetector(): BarcodeDetectorConstructor | null {
   return typeof ctor === 'function' ? ctor : null
 }
 
+/**
+ * Explicit second confirmation before the controller dials a plaintext relay.
+ *
+ * Kept hook-free (and exported for the view test) so it can be rendered by
+ * calling it directly; {@link AddDeviceDialog} owns the state and the retry.
+ */
+export function InsecureRelayWarning(props: {
+  readonly t: Translate
+  readonly name: string
+  readonly endpoints: readonly string[]
+  readonly onCancel: () => void
+  readonly onConfirm: () => void
+}): UiChild {
+  return el('div',
+    {
+      className: 'dm-modal-backdrop dm-modal-backdrop-nested',
+      onClick: (event: { target: unknown; currentTarget: unknown }) => {
+        if (event.target === event.currentTarget) props.onCancel()
+      },
+    },
+    el('div', {
+      className: 'dm-modal dm-modal-narrow',
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-label': props.t('pairing.insecureTitle'),
+      onClick: (event: { target: unknown; currentTarget: unknown; stopPropagation: () => void }) => { event.stopPropagation() },
+    },
+    el('div', { className: 'dm-modal-head' },
+      el('h2', { className: 'dm-modal-title' }, props.t('pairing.insecureTitle'))),
+    el('div', { className: 'dm-modal-body' },
+      el('p', { className: 'dm-card-sub' }, props.t('pairing.insecureDesc', { name: props.name })),
+      el('ul', { className: 'dm-url-list' },
+        ...props.endpoints.map(url => el('li', { key: url, className: 'dm-mono' }, url))),
+      el('div', { className: 'dm-banner dm-banner-warn', role: 'status' },
+        el('div', { className: 'dm-banner-text' }, props.t('pairing.insecureHint')))),
+    el('div', { className: 'dm-modal-actions' },
+      // Focus the safe choice: a stray Enter must cancel, not authorize a
+      // plaintext relay. Proceeding stays an explicit click/Tab.
+      Button({ variant: 'ghost', autoFocus: true, onClick: props.onCancel, children: props.t('common.cancel') }),
+      Button({
+        variant: 'primary',
+        onClick: props.onConfirm,
+        children: props.t('pairing.insecureContinue'),
+      }))))
+}
+
 /** "Add remote device" modal: paste a pairing link or scan a QR code. */
 export function AddDeviceDialog(props: {
   readonly t?: Translate
@@ -170,6 +217,13 @@ export function AddDeviceDialog(props: {
   const [submitting, setSubmitting] = useState(false)
   const [awaitingDevice, setAwaitingDevice] = useState<MeshDeviceView | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Set when `pair.inspect` reports a plaintext relay on a non-loopback host.
+  // Nothing is pinned or dialed until the operator confirms these URLs.
+  const [insecure, setInsecure] = useState<{
+    readonly link: string
+    readonly name: string
+    readonly endpoints: readonly string[]
+  } | null>(null)
   const [scanning, setScanning] = useState(false)
   // True while getUserMedia is pending, so the button can cancel the request
   // before the stream exists (permission prompt) instead of starting another.
@@ -215,11 +269,18 @@ export function AddDeviceDialog(props: {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') props.onClose()
+      if (event.key !== 'Escape') return
+      // Escape backs out of the plaintext-relay warning first, so one keystroke
+      // cannot discard a link that the operator may still want to inspect.
+      if (insecure !== null) {
+        setInsecure(null)
+        return
+      }
+      props.onClose()
     }
     window.addEventListener('keydown', onKeyDown)
     return () => { window.removeEventListener('keydown', onKeyDown) }
-  }, [props])
+  }, [props, insecure])
 
   // `pair.complete` returns immediately; the controlled device still has to
   // approve. Watch `state` until that device turns online or reports an error.
@@ -346,7 +407,10 @@ export function AddDeviceDialog(props: {
     }
   }
 
-  const submit = async (input: string): Promise<void> => {
+  const submit = async (
+    input: string,
+    options: { readonly confirmInsecure?: boolean } = {},
+  ): Promise<void> => {
     const link = extractPairingLink(input)
     if (link === null) {
       setError(t('pairing.invalidLink'))
@@ -356,7 +420,33 @@ export function AddDeviceDialog(props: {
     setError(null)
     setSubmitting(true)
     try {
-      const result = await meshApi.completePairing(link)
+      if (options.confirmInsecure !== true) {
+        // Ask the Host to verify the ticket before anything is pinned: a
+        // plaintext non-loopback relay must be confirmed by the operator first.
+        // The preflight is advisory: a Host from before `pair.inspect` existed
+        // (bundle refreshed, process not restarted yet) must still pair safe
+        // tickets, and it enforces the previous `wss://` rule by itself. A
+        // genuine ticket error is reported by `pair.complete` below either way.
+        let warning: { readonly name: string; readonly endpoints: readonly string[] } | null = null
+        try {
+          const inspection = await meshApi.inspectPairing(link)
+          if (inspection.insecureEndpoints.length > 0) {
+            warning = {
+              name: inspection.name.length > 0 ? inspection.name : inspection.deviceId,
+              endpoints: inspection.insecureEndpoints,
+            }
+          }
+        } catch {
+          // Preflight unavailable; `pair.complete` remains the authority.
+        }
+        if (warning !== null) {
+          if (mounted.current) setInsecure({ link, ...warning })
+          return
+        }
+      }
+      const result = await meshApi.completePairing(link, {
+        confirmInsecure: options.confirmInsecure === true,
+      })
       void refreshMeshState()
       if (!mounted.current) return
       if (result.pairing) {
@@ -371,6 +461,15 @@ export function AddDeviceDialog(props: {
     } finally {
       if (mounted.current) setSubmitting(false)
     }
+  }
+
+  const cancelInsecure = (): void => { setInsecure(null) }
+
+  const confirmInsecure = (): void => {
+    if (insecure === null) return
+    const link = insecure.link
+    setInsecure(null)
+    void submit(link, { confirmInsecure: true })
   }
 
   const busy = submitting || awaitingDevice !== null
@@ -445,10 +544,22 @@ export function AddDeviceDialog(props: {
       Button({
         variant: 'primary',
         busy,
-        disabled: busy || text.trim().length === 0,
+        // A warning that is already open owns the decision: the underlying
+        // form must not start another attempt (e.g. via Enter on a focused
+        // button) until the operator answers it.
+        disabled: busy || insecure !== null || text.trim().length === 0,
         onClick: () => { void submit(text) },
         children: t('pairing.startPairing'),
       }))),
+    insecure === null
+      ? null
+      : InsecureRelayWarning({
+        t,
+        name: insecure.name,
+        endpoints: insecure.endpoints,
+        onCancel: cancelInsecure,
+        onConfirm: confirmInsecure,
+      }),
   )
 }
 

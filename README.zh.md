@@ -275,6 +275,8 @@ docker run -d --name paseo-relay --restart unless-stopped --stop-timeout 30 \
    前面终止 TLS。
 3. 点**保存并启用**；出站 relay 连接建立后，面板显示**已连接**。
 4. 在公网主机上同时关闭**直连监听**，让配对凭证只包含 relay 路由。
+5. 若该配对凭证包含非回环主机的明文 `ws://` relay，controller 会弹出二次确认并
+   列出受影响的 relay URL，接受后才会拨号。除可信测试网络外请优先使用 `wss://`。
 
 运维注意事项：
 

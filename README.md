@@ -397,6 +397,10 @@ If the relay itself serves plain `ws://`
    relay socket is up.
 4. On a public host, also disable **Direct listener** so the pairing ticket is
    relay-only.
+5. If that ticket advertises a plaintext `ws://` relay on a non-loopback host,
+   the controller shows a second confirmation listing the affected relay URLs
+   and only dials after you accept. Prefer `wss://` anywhere beyond a trusted
+   test network.
 
 Operational notes:
 

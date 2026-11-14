@@ -412,10 +412,29 @@ export interface PairingTicketView {
   readonly qrSvg: string
 }
 
+/**
+ * Preflight view of a pairing link, produced without pinning the peer.
+ *
+ * `insecureEndpoints` lists relay endpoints that would be dialed over plaintext
+ * `ws://` to a non-loopback host. The Mesh session keeps its own encryption, but
+ * the relay can read routing metadata and tamper with frames, so the controller
+ * asks the user to confirm those URLs before `pair.complete` is called.
+ */
+export interface PairingLinkInspection {
+  readonly deviceId: string
+  readonly name: string
+  readonly platform: DevicePlatform
+  /** Endpoint URLs in the ticket's dial order. */
+  readonly endpoints: readonly string[]
+  /** Subset of `endpoints` using plaintext `ws://` on a non-loopback relay. */
+  readonly insecureEndpoints: readonly string[]
+}
+
 /** Endpoint names accepted by `POST /api/device-mesh`. */
 export type LocalApiEndpoint =
   | 'state'
   | 'pair.ticket'
+  | 'pair.inspect'
   | 'pair.complete'
   | 'pair.approve'
   | 'pair.deny'

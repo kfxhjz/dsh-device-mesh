@@ -16,6 +16,7 @@ import type {
   MeshInfo,
   PairStatusResult,
   PairingEndpoint,
+  PairingLinkInspection,
   PairingScope,
   PairingTicket,
   PeerRecord,
@@ -34,7 +35,13 @@ import type {
 import { DIRECT_MAX_CONNECTIONS, HANDSHAKE_TIMEOUT_MS, isRecord, MAX_INBOUND_SESSIONS, MAX_INBOUND_SESSIONS_PER_CONTROLLER, ENDPOINT_DIAL_TIMEOUT_MS, PAIRING_APPROVAL_TIMEOUT_MS, PAIRING_CONNECT_TIMEOUT_MS, RECONNECT_MAX_MS, RECONNECT_MIN_MS, SESSION_PING_INTERVAL_MS, silentLogger } from './config.ts'
 import type { MeshLogger } from './config.ts'
 import type { PairingService } from './pairing.ts'
-import { assertSupportedPairingScope, computeSas, PairingError, parsePairingLink } from './pairing.ts'
+import {
+  assertSupportedPairingScope,
+  computeSas,
+  insecureRelayEndpointUrls,
+  PairingError,
+  parsePairingLink,
+} from './pairing.ts'
 import type { MeshStore } from './store.ts'
 import type { PortalDaemon } from './portal-daemon.ts'
 import type { PortalController } from './portal-controller.ts'
@@ -951,6 +958,27 @@ export class DeviceMeshBroker {
   }
 
   /**
+   * Inspect a pairing link without pinning the peer or dialing anything.
+   *
+   * The client uses this preflight to show the plaintext-relay warning before
+   * the controller calls {@link pairWithLink}; nothing is persisted here and an
+   * invalid or expired link fails with the usual `PairingError` code.
+   *
+   * @param link - scanned/pasted pairing link.
+   * @returns verified ticket facts plus the endpoints that need confirmation.
+   */
+  inspectPairingLink(link: string): PairingLinkInspection {
+    const ticket = parsePairingLink(link, this.now())
+    return {
+      deviceId: ticket.id,
+      name: ticket.name,
+      platform: ticket.platform,
+      endpoints: ticket.eps.map(endpoint => endpoint.url),
+      insecureEndpoints: insecureRelayEndpointUrls(ticket.eps),
+    }
+  }
+
+  /**
    * Finish pairing as the controller *without blocking the browser request*.
    *
    * The daemon record is pinned and persisted immediately, then the physical
@@ -959,10 +987,25 @@ export class DeviceMeshBroker {
    * local user approved, `error` with a detail if it never connects.
    *
    * @param link - scanned/pasted pairing link.
+   * @param options - `confirmInsecure: true` accepts a ticket that relays over
+   *   plaintext `ws://` to a non-loopback host. The client sets it only after
+   *   the user confirmed the affected relay URLs; without it such a link fails
+   *   with `mesh/insecure-transport`, so a programmatic caller cannot pin a
+   *   plaintext relay by accident.
    * @returns device view with the freshly pinned daemon (usually `connecting`).
    */
-  async pairWithLink(link: string): Promise<MeshDeviceView> {
+  async pairWithLink(
+    link: string,
+    options: { readonly confirmInsecure?: boolean } = {},
+  ): Promise<MeshDeviceView> {
     const ticket = parsePairingLink(link, this.now())
+    const insecure = insecureRelayEndpointUrls(ticket.eps)
+    if (insecure.length > 0 && options.confirmInsecure !== true) {
+      throw new PairingError(
+        'mesh/insecure-transport',
+        `pairing link uses an unencrypted relay: ${insecure.join(', ')}; confirm the plaintext relay warning to continue`,
+      )
+    }
     const existing = this.store.findPeer('daemons', ticket.id)
     if (existing !== undefined) {
       if (existing.revokedAt !== null) {

@@ -422,6 +422,39 @@ describe('broker: daemon role and state', () => {
 })
 
 describe('broker: controller role', () => {
+  it('requires explicit confirmation before dialing a plaintext relay', async () => {
+    const fixture = await makeBroker()
+    try {
+      const daemonSide = generateDeviceIdentity({ name: 'Plain relay daemon' })
+      const remoteTicket = createPairingTicket({
+        identity: daemonSide,
+        endpoints: [{ k: 'relay', url: 'ws://relay.example.com/ws', sid: 'public-server-id', v: 2 }],
+        token: Buffer.alloc(32, 6).toString('base64url'),
+        now: Date.now(),
+      })
+
+      const inspection = fixture.broker.inspectPairingLink(remoteTicket.link)
+      assert.equal(inspection.deviceId, daemonSide.deviceId)
+      assert.equal(inspection.name, 'Plain relay daemon')
+      assert.deepEqual(inspection.endpoints, ['ws://relay.example.com/ws'])
+      assert.deepEqual(inspection.insecureEndpoints, ['ws://relay.example.com/ws'])
+      // The preflight must not pin or dial anything.
+      assert.equal(fixture.store.findPeer('daemons', daemonSide.deviceId), undefined)
+
+      await assert.rejects(
+        () => fixture.broker.pairWithLink(remoteTicket.link),
+        (error: unknown) => error instanceof PairingError && error.code === 'mesh/insecure-transport',
+      )
+      assert.equal(fixture.store.findPeer('daemons', daemonSide.deviceId), undefined)
+
+      const view = await fixture.broker.pairWithLink(remoteTicket.link, { confirmInsecure: true })
+      assert.equal(view.deviceId, daemonSide.deviceId)
+      assert.ok(fixture.store.findPeer('daemons', daemonSide.deviceId))
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
   it('pairs from a link, connects, lists remote workspaces and opens a portal', async () => {
     const fixture = await makeBroker()
     try {

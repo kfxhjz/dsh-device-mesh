@@ -474,6 +474,9 @@ textarea.dm-input { resize: vertical; min-height: 72px; }
   background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.42));
 }
 
+/* Second confirmation stacked above another modal (plaintext relay warning). */
+.dm-modal-backdrop-nested { z-index: 70; }
+
 .dm-modal {
   display: flex;
   flex-direction: column;
@@ -484,6 +487,8 @@ textarea.dm-input { resize: vertical; min-height: 72px; }
   background: var(--dsw-alias-bg-layer-1);
   box-shadow: var(--dsw-elevation-panel);
 }
+
+.dm-modal-narrow { width: min(460px, 100%); }
 
 .dm-modal-head {
   display: flex;

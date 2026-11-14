@@ -18,6 +18,7 @@ import {
   computeSas,
   createPairingTicket,
   hashPairingToken,
+  insecureRelayEndpointUrls,
   parsePairingLink,
   verifyPairingTicket,
 } from '../../src/host/pairing.ts'
@@ -149,13 +150,28 @@ describe('pairing: ticket endpoint validation', () => {
     return parsePairingLink(created.link)
   }
 
-  it('accepts direct WebSocket, loopback plaintext relay and public wss relay', () => {
+  it('accepts direct WebSocket, plaintext relays and public wss relay', () => {
     const endpoints: PairingEndpoint[] = [
       { k: 'direct', url: 'ws://192.168.1.2:45871/mesh' },
       { k: 'relay', url: 'ws://127.0.0.1:4000/ws', sid: 'local-server-id', v: 2 },
+      { k: 'relay', url: 'ws://relay.example.com/ws', sid: 'public-server-id', v: 2 },
       { k: 'relay', url: 'wss://relay.example.com/ws', sid: 'secret-server-id', v: 2 },
     ]
+    // A plaintext public relay is no longer a parse error: the controller
+    // confirms it explicitly before dialing (see the next test).
     assert.deepEqual(parseEndpoints(endpoints).eps, endpoints)
+  })
+
+  it('flags only a plaintext non-loopback relay for confirmation', () => {
+    const endpoints: PairingEndpoint[] = [
+      { k: 'direct', url: 'ws://192.168.1.2:45871/mesh' },
+      { k: 'relay', url: 'ws://127.0.0.1:4000/ws', sid: 'local-server-id', v: 2 },
+      { k: 'relay', url: 'ws://relay.example.com/ws', sid: 'public-server-id', v: 2 },
+      { k: 'relay', url: 'wss://relay.example.com/ws', sid: 'secret-server-id', v: 2 },
+      { k: 'relay', url: 'ws://[::1]:4000/ws', sid: 'ipv6-loopback', v: 2 },
+    ]
+    assert.deepEqual(insecureRelayEndpointUrls(endpoints), ['ws://relay.example.com/ws'])
+    assert.deepEqual(insecureRelayEndpointUrls([]), [])
   })
 
   it('rejects unsafe or malformed endpoints before the ticket is dialed', () => {
@@ -164,7 +180,6 @@ describe('pairing: ticket endpoint validation', () => {
       [{ k: 'direct', url: 'file:///etc/passwd' }],
       [{ k: 'direct', url: 'ws://user:pass@192.168.1.2:45871/mesh' }],
       [{ k: 'direct', url: `ws://${'a'.repeat(512)}` }],
-      [{ k: 'relay', url: 'ws://relay.example.com/ws', sid: 'secret-server-id', v: 2 }],
       [{ k: 'relay', url: 'https://relay.example.com/ws', sid: 'secret-server-id', v: 2 }],
       [{ k: 'relay', url: 'wss://relay.example.com/ws', sid: '', v: 2 }],
       [{ k: 'relay', url: 'wss://relay.example.com/ws', sid: 'bad sid', v: 2 }],

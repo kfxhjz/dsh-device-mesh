@@ -159,9 +159,11 @@ function invalid(message: string): PairingError {
  *
  * A pairing link is untrusted input: the controller dials whatever endpoints the
  * ticket lists before the local user approves anything. Restrict endpoints to
- * WebSocket transports, reject embedded credentials, and keep a public relay on
- * TLS (SECURITY.md: a public relay must use `wss://`). Loopback `ws://` stays
- * accepted for a local relay and for the isolated two-instance E2E runs.
+ * WebSocket transports, reject embedded credentials, and reject an empty host.
+ * A plaintext `ws://` relay to a non-loopback host is accepted, but the
+ * controller must confirm it explicitly before dialing: see
+ * {@link insecureRelayEndpointUrls}. The Mesh session is still encrypted, yet
+ * the relay itself can read routing metadata and tamper with frames.
  *
  * The original string is returned unchanged: ticket signatures cover the
  * canonical JSON of the endpoint objects, so normalizing the URL here would make
@@ -194,10 +196,35 @@ function parseEndpointUrl(kind: 'direct' | 'relay', url: unknown): string {
   if (parsed.hostname.length === 0) {
     throw invalid(`pairing ticket ${kind} endpoint has no host`)
   }
-  if (kind === 'relay' && parsed.protocol === 'ws:' && !isLoopbackHostname(parsed.hostname)) {
-    throw invalid('pairing ticket relay endpoint must use wss:// for non-loopback hosts')
-  }
   return url
+}
+
+/**
+ * Relay endpoints that would be dialed over plaintext `ws://` to a
+ * non-loopback host.
+ *
+ * The ticket is signed by the daemon, but the choice is still surfaced to the
+ * local user before the controller dials. Loopback `ws://` stays quiet: a relay
+ * bound to the same machine cannot expose its traffic to a network, so it is
+ * fine for local testing.
+ *
+ * @param endpoints - validated endpoints from a ticket.
+ * @returns plaintext relay URLs, in ticket order.
+ */
+export function insecureRelayEndpointUrls(endpoints: readonly PairingEndpoint[]): string[] {
+  const urls: string[] = []
+  for (const endpoint of endpoints) {
+    if (endpoint.k !== 'relay') continue
+    let parsed: URL
+    try {
+      parsed = new URL(endpoint.url)
+    } catch {
+      // `parseEndpoint` already rejected malformed URLs; be defensive anyway.
+      continue
+    }
+    if (parsed.protocol === 'ws:' && !isLoopbackHostname(parsed.hostname)) urls.push(endpoint.url)
+  }
+  return urls
 }
 
 function parseEndpoint(value: unknown): PairingEndpoint {
