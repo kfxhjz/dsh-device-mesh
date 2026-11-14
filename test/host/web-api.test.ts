@@ -35,6 +35,8 @@ const DEVICE: MeshDeviceView = {
   name: 'Peer',
   platform: 'linux',
   direction: 'daemon',
+  controllable: true,
+  controlsMe: false,
   pairedAt: '2026-01-01T00:00:00.000Z',
   lastSeenAt: null,
   revoked: false,

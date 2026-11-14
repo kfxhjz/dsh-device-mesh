@@ -114,6 +114,7 @@ test('switching to a remote host mirrors its workspaces in the sidebar', { timeo
 
   // Pair: link -> controller -> daemon approval -> online.
   const daemonState = await daemon.api<HostState>('state')
+  const controllerState = await controller.api<HostState>('state')
   const ticket = await daemon.api<{ link: string }>('pair.ticket')
   await controller.api('pair.complete', { link: ticket.link })
   const pending = await waitFor(async () => (await daemon.api<HostState>('state')).pendingPairings[0],
@@ -132,6 +133,18 @@ test('switching to a remote host mirrors its workspaces in the sidebar', { timeo
     await daemonPage.goto(daemon.url, { waitUntil: 'domcontentloaded', timeout: 30_000 })
     await daemonPage.waitForFunction(() => document.querySelectorAll('#root *').length > 50, { timeout: 30_000 })
     await dismissOnboarding(daemonPage)
+    // The daemon's switcher lists only hosts it can control: the paired
+    // controller must not appear as a remote host (selecting one used to open a
+    // mirror that could only fail with "could not load remote workspaces").
+    await daemonPage.locator('[data-device-mesh-host-toggle]').click()
+    await daemonPage.locator('[data-device-mesh-host-menu]').waitFor({ state: 'visible', timeout: 10_000 })
+    assert.equal(
+      await daemonPage.locator(`[data-dm-host-id="${controllerState.self.deviceId}"]`).count(),
+      0,
+      'the daemon must not offer its controller as a remote host',
+    )
+    assert.equal(await daemonPage.locator('[data-dm-host-id="local"]').count(), 1)
+    await daemonPage.keyboard.press('Escape')
     const newSession = daemonPage.getByRole('button', { name: /^(New Session|新会话)$/u }).first()
     if (await newSession.isVisible().catch(() => false)) {
       await newSession.click()

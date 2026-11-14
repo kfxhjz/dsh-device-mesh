@@ -468,7 +468,12 @@ function DeviceCard(props: {
       el('div', { className: 'dm-device-name' },
         DeviceMeshGlyph({ size: 16 }),
         el('span', { className: 'dm-truncate' }, device.name),
-        el('span', { className: 'dm-pill dm-pill-remote' }, t('devices.remoteBadge'))),
+        device.controllable
+          ? el('span', { className: 'dm-pill dm-pill-remote' }, t('devices.remoteBadge'))
+          : null,
+        device.controlsMe
+          ? el('span', { className: 'dm-pill' }, t('devices.controllerBadge'))
+          : null),
       StatusLine({ status: device.status, label: t(`status.${device.status}`) })),
     el('div', { className: 'dm-device-meta' },
       el('span', null, platformLabel(device.platform, t)),
@@ -476,24 +481,31 @@ function DeviceCard(props: {
       el('span', null, `${t('devices.lastSeen')}: ${formatRelativeTime(device.lastSeenAt, t)}`),
       el('span', { className: 'dm-mono', title: device.deviceId }, device.deviceId)),
     statusDetailLine(device, t),
+    device.controlsMe && !device.controllable && !device.revoked
+      ? el('span', { className: 'dm-muted' }, t('devices.controllerHint'))
+      : null,
     el('div', { className: 'dm-device-actions' },
-      connectionButton(),
-      Button({
-        variant: 'primary',
-        busy: busy('portal') || busy('tab'),
-        disabled: openDisabled || device.revoked,
-        onClick: () => { props.actions.onOpenRemote(device) },
-        children: [ExternalGlyph({ size: 14 }), el('span', { key: 'label' }, t('devices.openRemote'))],
-      }),
-      props.actions.onOpenRemoteTab === undefined
-        ? null
-        : Button({
+      // Only a peer this machine holds a daemon record for can be dialed or
+      // opened; a controller-only peer is managed (revoke/forget) from here.
+      device.controllable ? connectionButton() : null,
+      device.controllable
+        ? Button({
+          variant: 'primary',
+          busy: busy('portal') || busy('tab'),
+          disabled: openDisabled || device.revoked,
+          onClick: () => { props.actions.onOpenRemote(device) },
+          children: [ExternalGlyph({ size: 14 }), el('span', { key: 'label' }, t('devices.openRemote'))],
+        })
+        : null,
+      device.controllable && props.actions.onOpenRemoteTab !== undefined
+        ? Button({
           small: true,
           busy: busy('tab'),
           disabled: anyBusy || device.revoked,
           onClick: () => { (props.actions.onOpenRemoteTab as (d: MeshDeviceView) => void)(device) },
           children: t('devices.openInTab'),
-        }),
+        })
+        : null,
       Button({
         variant: 'danger',
         small: true,
@@ -643,7 +655,15 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
       })
     },
     onRevoke: (device) => {
-      if (!confirmAction(t('devices.confirmRevoke'))) return
+      // Revoking clears both directions. Say what the user actually loses:
+      // their control over a remote host, the peer's control over this machine,
+      // or both for a mutually paired device.
+      const message = device.controllable && device.controlsMe
+        ? t('devices.confirmRevokeBoth')
+        : device.controllable
+          ? t('devices.confirmRevokeRemote')
+          : t('devices.confirmRevoke')
+      if (!confirmAction(message)) return
       runAction(`${device.deviceId}:revoke`, async () => { await meshApi.revokeDevice(device.deviceId) },
         t('devices.revokedNotice', { name: device.name }))
     },
@@ -687,7 +707,7 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
       Button({ variant: 'ghost', small: true, onClick: () => { void refreshMeshState() }, children: t('common.retry') })),
     notice === null ? null : NoticeBanner({ message: notice }),
     el(PendingPairingsCard, { t, requests: state.pendingPairings }),
-    selectedDevice === undefined ? null : el(SelectedHostCard, {
+    selectedDevice === undefined || !selectedDevice.controllable ? null : el(SelectedHostCard, {
       t,
       device: selectedDevice,
       busyKey,

@@ -18,6 +18,15 @@
   `ws://` 与 `wss://` 票据的配对流程保持不变；编程调用方在确认前仍会以
   `mesh/insecure-transport` 失败关闭。
 
+### 修复（Fixed）
+
+- 仅作为本机控制方（controller）配对的设备，不再出现在左栏的主机切换器中。
+  选中它原本会调用 `workspaces.refresh`，而 Host 因为没有对应的 daemon 记录会拒绝
+  （“device is not paired as a controllable daemon”），界面于是显示“加载远程工作区
+  失败”。现在每个设备视图都带有明确的 `controllable` 与 `controlsMe` 能力（双向配对
+  时两者都为 true），切换器只列出可控制且未撤销的主机；设备面板会把纯控制方标为
+  “控制本机”、隐藏对它的远程控制操作，并用与实际影响一致的文案确认撤销。
+
 ## 0.1.5 - 2026-11-13
 
 ### 修复（Fixed）

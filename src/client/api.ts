@@ -114,11 +114,17 @@ export function normalizeDevice(value: unknown): MeshDeviceView {
   const statusDetail = optionalText(raw.statusDetail)
   const sas = optionalText(raw.sas)
   const remoteWorkspacesAt = optionalText(raw.remoteWorkspacesAt)
+  const direction = raw.direction === 'daemon' ? 'daemon' : 'controller'
   return {
     deviceId: text(raw.deviceId),
     name: text(raw.name, text(raw.deviceId)),
     platform: platformOf(raw.platform),
-    direction: raw.direction === 'daemon' ? 'daemon' : 'controller',
+    direction,
+    // An older Host does not send the capability flags: fall back to the
+    // single direction it reports, so a controller-only peer is never offered
+    // as a remote host.
+    controllable: typeof raw.controllable === 'boolean' ? raw.controllable : direction === 'daemon',
+    controlsMe: typeof raw.controlsMe === 'boolean' ? raw.controlsMe : direction === 'controller',
     pairedAt: text(raw.pairedAt),
     lastSeenAt: typeof raw.lastSeenAt === 'string' ? raw.lastSeenAt : null,
     revoked: raw.revoked === true,

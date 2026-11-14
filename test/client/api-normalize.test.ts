@@ -76,6 +76,10 @@ describe('api: device and state normalization', () => {
     assert.equal(device.deviceId, 'd1')
     assert.equal(device.name, 'd1')
     assert.equal(device.direction, 'controller')
+    // A payload without capability flags is treated as controller-only, so a
+    // legacy/partial device is never offered as a remote host.
+    assert.equal(device.controllable, false)
+    assert.equal(device.controlsMe, true)
     assert.equal(device.status, 'offline')
     assert.equal(device.revoked, false)
     assert.deepEqual(device.scope, { kind: 'control', workspaces: 'all', expiresAt: null })
@@ -98,12 +102,26 @@ describe('api: device and state normalization', () => {
     })
     assert.equal(device.platform, 'linux')
     assert.equal(device.direction, 'daemon')
+    assert.equal(device.controllable, true)
+    assert.equal(device.controlsMe, false)
     assert.equal(device.revoked, true)
     assert.equal(device.sas, '123-456')
     assert.equal(device.statusDetail, 'waiting for approval')
     assert.equal(device.remoteWorkspaces?.length, 1)
     assert.equal(device.remoteWorkspacesTruncated, true)
     assert.equal(normalizeDevice('nope').status, 'offline')
+  })
+
+  it('keeps both capabilities for a mutually paired device', () => {
+    const device = normalizeDevice({
+      deviceId: 'd3',
+      direction: 'controller',
+      controllable: true,
+      controlsMe: true,
+      status: 'online',
+    })
+    assert.equal(device.controllable, true)
+    assert.equal(device.controlsMe, true)
   })
 
   it('normalizes a partial host state snapshot', () => {

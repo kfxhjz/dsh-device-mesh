@@ -94,12 +94,18 @@ function hostsOf(snapshot: ReturnType<typeof getMeshSnapshot>): { hosts: readonl
     selected,
     hosts: [
       { id: 'local', name: state.self.name, status: 'online', local: true },
-      ...state.devices.map(device => ({
-        id: device.deviceId,
-        name: device.name,
-        status: device.status,
-        local: false,
-      })),
+      // Only peers this machine can actually control are remote hosts. A
+      // controller-only peer is managed from the Devices panel; offering it
+      // here opened a mirror that could only fail with "device is not paired as
+      // a controllable daemon", which looked like a broken host.
+      ...state.devices
+        .filter(device => device.controllable && !device.revoked)
+        .map(device => ({
+          id: device.deviceId,
+          name: device.name,
+          status: device.status,
+          local: false,
+        })),
     ],
   }
 }
@@ -1399,17 +1405,19 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     if (disposed) return
     const snapshot = getMeshSnapshot()
     const { hosts, selected } = hostsOf(snapshot)
+    const selectedDevice = selected === 'local'
+      ? undefined
+      : snapshot.state?.devices.find(item => item.deviceId === selected)
     if (selected !== 'local' && snapshot.state !== null
-      && !snapshot.state.devices.some(device => device.deviceId === selected)) {
-      // The selected device was forgotten/revoked elsewhere: fall back to this
-      // host rather than keeping a stale scope.
+      && (selectedDevice === undefined || !selectedDevice.controllable || selectedDevice.revoked)) {
+      // The selected device was forgotten/revoked elsewhere, or it is a
+      // controller-only peer this machine cannot open: fall back to this host
+      // instead of keeping a stale or unusable scope.
       setSelectedHost('local')
       return
     }
     renderBar(hosts, selected)
-    const device = selected === 'local'
-      ? undefined
-      : snapshot.state?.devices.find(item => item.deviceId === selected)
+    const device = selectedDevice
     const previous = remoteHost
     remoteHost = device === undefined ? null : device.deviceId
     if (remoteHost !== previous) {

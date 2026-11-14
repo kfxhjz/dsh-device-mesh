@@ -4,7 +4,7 @@ import { afterEach, test } from 'node:test'
 import { Window } from 'happy-dom'
 
 import { getMeshSnapshot, refreshMeshState } from '../../src/client/api.ts'
-import { setSelectedHost } from '../../src/client/host-store.ts'
+import { getSelectedHost, setSelectedHost } from '../../src/client/host-store.ts'
 import { mountSidebarHost } from '../../src/client/sidebar-host.ts'
 
 const STATE = {
@@ -24,6 +24,8 @@ const STATE = {
     name: 'Studio',
     platform: 'linux',
     direction: 'daemon',
+    controllable: true,
+    controlsMe: false,
     pairedAt: '2026-11-12T00:00:00.000Z',
     lastSeenAt: null,
     revoked: false,
@@ -53,6 +55,20 @@ const STATE = {
         }],
       }],
     },
+  }, {
+    // Paired only as a controller of this machine: it can control us, but we
+    // cannot open it as a remote host.
+    deviceId: 'dm_controller',
+    name: 'Phone',
+    platform: 'ios',
+    direction: 'controller',
+    controllable: false,
+    controlsMe: true,
+    pairedAt: '2026-11-12T00:00:00.000Z',
+    lastSeenAt: null,
+    revoked: false,
+    scope: { kind: 'control', workspaces: 'all', expiresAt: null },
+    status: 'online',
   }],
   pendingPairings: [],
   portals: [],
@@ -138,6 +154,12 @@ test('mounts the host bar above the native header and drives the switcher menu',
     assert.ok(menu)
     assert.ok(menu.textContent?.includes('Laptop'))
     assert.ok(menu.textContent?.includes('Studio'))
+    assert.equal(
+      menu.textContent?.includes('Phone'),
+      false,
+      'a controller-only peer must not be offered as a remote host',
+    )
+    assert.equal(menu.querySelector('[data-dm-host-id="dm_controller"]'), null)
     assert.equal(toggle.getAttribute('aria-expanded'), 'true')
 
     const add = menu.querySelector('[data-dm-add-host]')
@@ -153,6 +175,29 @@ test('mounts the host bar above the native header and drives the switcher menu',
 
   assert.equal(document.querySelector('[data-device-mesh-host-bar]'), null)
   assert.equal(document.querySelector('[data-device-mesh-remote-workspaces]'), null)
+})
+
+test('falls back to the local host for a controller-only selection', async () => {
+  setupDom()
+  setSelectedHost('dm_controller')
+  await refreshMeshState()
+
+  const teardown = mountSidebarHost({
+    t: (key: string) => key,
+    openDevices: () => {},
+    openPortal: () => {},
+    connectDevice: () => {},
+  })
+  try {
+    assert.equal(getSelectedHost(), 'local', 'an unusable selection must fall back')
+    const remoteRoot = document.querySelector<HTMLElement>('[data-device-mesh-remote-workspaces]')
+    assert.ok(remoteRoot)
+    assert.equal(remoteRoot.hidden, true)
+    const toggle = document.querySelector('[data-device-mesh-host-toggle]')
+    assert.ok(toggle?.textContent?.includes('Laptop'))
+  } finally {
+    teardown()
+  }
 })
 
 test('renders the remote mirror with a spinner for a running remote session', async () => {

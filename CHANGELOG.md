@@ -20,6 +20,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before, and a programmatic caller still fails closed with
   `mesh/insecure-transport` until it confirms.
 
+### Fixed
+
+- A device paired only as a controller of this machine no longer appears in the
+  sidebar host switcher. Selecting it used to request `workspaces.refresh`,
+  which the Host rejects because no daemon record exists ("device is not paired
+  as a controllable daemon"), so the mirror showed "Could not load remote
+  workspaces". Every device view now carries explicit `controllable` and
+  `controlsMe` capabilities (both set for a mutually paired device), the
+  switcher lists only controllable, non-revoked hosts, and the Devices panel
+  labels a controller as "Controls this device", hides the remote-control
+  actions for it, and confirms a revoke with copy that matches the actual loss.
+
 ## 0.1.5 - 2026-11-13
 
 ### Fixed

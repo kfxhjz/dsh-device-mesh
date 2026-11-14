@@ -415,6 +415,11 @@ describe('broker: daemon role and state', () => {
       assert.ok(record)
       assert.equal(record.scope.kind, 'control')
       assert.equal(fixture.broker.state().pendingPairings.length, 0)
+      // The daemon side may revoke/forget the controller, but cannot open it as
+      // a remote host itself.
+      const view = fixture.broker.state().devices.find(device => device.deviceId === controller.deviceId)
+      assert.equal(view?.controllable, false)
+      assert.equal(view?.controlsMe, true)
     } finally {
       await fixture.cleanup()
     }
@@ -422,6 +427,41 @@ describe('broker: daemon role and state', () => {
 })
 
 describe('broker: controller role', () => {
+  it('reports both capabilities for a peer paired in both directions', async () => {
+    const fixture = await makeBroker()
+    try {
+      const peer = generateDeviceIdentity({ name: 'Mutual peer' })
+      const remoteTicket = createPairingTicket({
+        identity: peer,
+        endpoints: [{ k: 'direct', url: 'ws://192.0.2.2:45871/mesh' }],
+        token: Buffer.alloc(32, 8).toString('base64url'),
+        now: Date.now(),
+      })
+      // This machine controls the peer ...
+      await fixture.broker.pairWithLink(remoteTicket.link)
+      assert.equal(fixture.store.findPeer('daemons', peer.deviceId) !== undefined, true)
+
+      // ... and the same peer also holds a controller grant over this machine.
+      const created = await fixture.broker.createPairingTicket()
+      const outcome = await fixture.broker.beginPairToken(
+        peer,
+        created.ticket.tok,
+        new Uint8Array(32).fill(8),
+        '654-321',
+      )
+      assert.equal(outcome.kind, 'pair-approval-required')
+      if (outcome.kind !== 'pair-approval-required') return
+      fixture.broker.approvePairing(outcome.requestId)
+      assert.deepEqual(await outcome.decide, { approved: true })
+
+      const view = fixture.broker.state().devices.find(device => device.deviceId === peer.deviceId)
+      assert.equal(view?.controllable, true)
+      assert.equal(view?.controlsMe, true)
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
   it('requires explicit confirmation before dialing a plaintext relay', async () => {
     const fixture = await makeBroker()
     try {
@@ -472,6 +512,8 @@ describe('broker: controller role', () => {
       // the handshake finishes in the background.
       assert.ok(view.status === 'connecting' || view.status === 'online')
       assert.equal(view.direction, 'daemon')
+      assert.equal(view.controllable, true)
+      assert.equal(view.controlsMe, false)
       assert.ok(fixture.store.findPeer('daemons', daemonSide.deviceId))
       await waitFor(() => fixture.broker.state().devices
         .find(device => device.deviceId === daemonSide.deviceId)?.status === 'online')

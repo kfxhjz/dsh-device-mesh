@@ -370,6 +370,16 @@ export interface MeshDeviceView {
   readonly platform: DevicePlatform
   /** `self` never appears in `devices`; kept for clarity. */
   readonly direction: 'controller' | 'daemon'
+  /**
+   * This machine holds a `daemons` record and can control the peer.
+   *
+   * False for a peer that only exists as a controller of this machine, which
+   * cannot be opened as a remote host. A peer paired both ways has this and
+   * {@link controlsMe} set.
+   */
+  readonly controllable: boolean
+  /** The peer holds a `controllers` record and may control this machine. */
+  readonly controlsMe: boolean
   readonly pairedAt: string
   readonly lastSeenAt: string | null
   readonly revoked: boolean

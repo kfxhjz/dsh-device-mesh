@@ -1687,7 +1687,10 @@ export class DeviceMeshBroker {
     const view = this.deviceView(deviceId)
     if (view !== undefined) return view
     const peer = records.daemons ?? records.controllers
-    return buildPeerView(peer as PeerRecord, 'revoked')
+    return buildPeerView(peer as PeerRecord, 'revoked', {
+      controllable: records.daemons !== undefined,
+      controlsMe: records.controllers !== undefined,
+    })
   }
 
   /** Remove a peer from both directions (and close anything it owns). */
@@ -2081,6 +2084,8 @@ export class DeviceMeshBroker {
       name: peer.name,
       platform: peer.platform,
       direction: 'daemon',
+      controllable: true,
+      controlsMe: false,
       pairedAt: peer.pairedAt,
       lastSeenAt: peer.lastSeenAt,
       revoked: peer.revokedAt !== null,
@@ -2107,6 +2112,8 @@ export class DeviceMeshBroker {
       name: peer.name,
       platform: peer.platform,
       direction: 'controller',
+      controllable: false,
+      controlsMe: true,
       pairedAt: peer.pairedAt,
       lastSeenAt: peer.lastSeenAt,
       revoked: peer.revokedAt !== null,
@@ -2140,6 +2147,10 @@ function mergeDeviceViews(daemon: MeshDeviceView, controller: MeshDeviceView): M
       : controller.status
   return {
     ...controller,
+    // A mutual pair is both a controllable daemon and a controller of this
+    // machine; the merged view must not hide either capability.
+    controllable: daemon.controllable || controller.controllable,
+    controlsMe: daemon.controlsMe || controller.controlsMe,
     status,
     ...(daemon.statusDetail !== undefined ? { statusDetail: daemon.statusDetail } : {}),
     ...(daemon.status === 'connecting' && daemon.sas !== undefined ? { sas: daemon.sas } : {}),
@@ -2149,12 +2160,18 @@ function mergeDeviceViews(daemon: MeshDeviceView, controller: MeshDeviceView): M
   }
 }
 
-function buildPeerView(peer: PeerRecord, status: DeviceStatus): MeshDeviceView {
+function buildPeerView(
+  peer: PeerRecord,
+  status: DeviceStatus,
+  role: { readonly controllable: boolean; readonly controlsMe: boolean },
+): MeshDeviceView {
   return {
     deviceId: peer.deviceId,
     name: peer.name,
     platform: peer.platform,
     direction: 'daemon',
+    controllable: role.controllable,
+    controlsMe: role.controlsMe,
     pairedAt: peer.pairedAt,
     lastSeenAt: peer.lastSeenAt,
     revoked: peer.revokedAt !== null,
