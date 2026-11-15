@@ -317,9 +317,12 @@ export function injectEmbedShell(
   newSession?: EmbedNewSession,
 ): string {
   const css = [
-    "html[data-dm-embed='1'] [class$='_frame']{grid-template-columns:minmax(0,1fr)!important}",
-    "html[data-dm-embed='1'] [class$='_centerCol']{grid-column:1!important}",
-    "html[data-dm-embed='1'] [class$='_sidebarCol'],html[data-dm-embed='1'] [class$='_detailsCol'],html[data-dm-embed='1'] [class$='_rightbarCol']{display:none!important}",
+    // Replace the remote left sidebar with the controller's own host mirror.
+    // Keep its grid track and let the center column span it: overriding the
+    // whole `grid-template-columns` would also clobber the app's rightbar
+    // track, which left the visible "Open right sidebar" button dead.
+    "html[data-dm-embed='1'] [class$='_sidebarCol'],html[data-dm-embed='1'] [class$='_detailsCol']{display:none!important}",
+    "html[data-dm-embed='1'] [class$='_centerCol']{grid-column:1 / 3!important}",
     "html[data-dm-embed='1'] [data-device-mesh-host-bar],html[data-dm-embed='1'] [data-device-mesh-remote-workspaces]{display:none!important}",
   ].join('')
   const remember = sessionId === undefined || sessionId.length === 0

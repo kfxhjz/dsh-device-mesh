@@ -1059,6 +1059,20 @@ describe('portal-controller: header helpers', () => {
     assert.ok(injected.indexOf('dm-embed-shell') < injected.indexOf('</head>'))
   })
 
+  it('keeps the embedded remote right sidebar usable', () => {
+    const html = '<!doctype html><html><head></head><body>remote</body></html>'
+    const injected = injectEmbedShell(html)
+    // The remote left sidebar is replaced by the controller's own mirror ...
+    assert.ok(injected.includes("[class$='_sidebarCol']"))
+    // ... but the right sidebar must stay visible: its "Open right sidebar"
+    // control is still rendered, and hiding the column made that button dead.
+    assert.equal(injected.includes("[class$='_rightbarCol']"), false)
+    // The center spans the collapsed left track instead of forcing a one-column
+    // grid, which would also override the app's rightbar track.
+    assert.ok(injected.includes("[class$='_centerCol']{grid-column:1 / 3!important}"))
+    assert.equal(injected.includes('grid-template-columns:minmax(0,1fr)!important'), false)
+  })
+
   it('carries a one-shot new-session request into the embed shell', () => {
     const html = '<!doctype html><html><head></head><body>remote</body></html>'
     const injected = injectEmbedShell(html, undefined, { workspaceId: 'ws-1', requestId: 'req-1' })

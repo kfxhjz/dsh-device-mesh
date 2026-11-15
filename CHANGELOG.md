@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   switcher lists only controllable, non-revoked hosts, and the Devices panel
   labels a controller as "Controls this device", hides the remote-control
   actions for it, and confirms a revoke with copy that matches the actual loss.
+- The embedded remote DSH UI no longer renders a dead sidebar button. The embed
+  stylesheet used to force a one-column grid and hide the right sidebar column
+  together with the left one, so the visible "Open right sidebar" control did
+  nothing. The left sidebar is still hidden and replaced by the controller's own
+  host mirror, but the center column now spans its grid track and the remote
+  right sidebar (file previews, panels) opens normally.
 
 ## 0.1.5 - 2026-11-13
 

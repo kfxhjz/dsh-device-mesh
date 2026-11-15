@@ -234,6 +234,33 @@ test('switching to a remote host mirrors its workspaces in the sidebar', { timeo
   }, 30_000, () => 'remote pane iframe stayed blank')
   const frameText = (await frame.evaluate(() => document.body.innerText).catch(() => '')).replace(/\s+/gu, ' ')
   assert.ok(!frameText.includes('cross-site request'), `remote pane hit the portal fence: ${frameText.slice(0, 200)}`)
+
+  // The embedded remote shell still renders its right-sidebar control. It must
+  // actually open the pane's right sidebar instead of doing nothing because the
+  // embed CSS hides the column.
+  const rightbarWidth = async (): Promise<number> => await frame.evaluate(() => {
+    const col = document.querySelector('[class$="_rightbarCol"]')
+    return col instanceof HTMLElement ? col.getBoundingClientRect().width : -1
+  })
+  await waitFor(async () => await frame.evaluate(
+    () => document.querySelector('[class$="_rightbarCol"]') !== null ? true : undefined,
+  ), 20_000, () => 'the embedded remote layout did not mount')
+  await frame.evaluate(() => {
+    document.querySelectorAll('[class*="_mask_"]').forEach((element) => { element.remove() })
+  })
+  assert.equal(await rightbarWidth(), 0, 'the remote right sidebar starts closed')
+  await waitFor(async () => await frame.evaluate(
+    () => document.querySelector('[data-sidebar-right-expand]') !== null ? true : undefined,
+  ), 10_000, () => 'the embedded remote UI did not render its right-sidebar control')
+  const clickedRightbar = await frame.evaluate(() => {
+    const button = document.querySelector('[data-sidebar-right-expand]')
+    if (!(button instanceof HTMLElement)) return false
+    button.click()
+    return true
+  })
+  assert.equal(clickedRightbar, true, 'the embedded remote UI must render its right-sidebar control')
+  await waitFor(async () => (await rightbarWidth()) > 0 ? true : undefined,
+    10_000, () => 'the remote right sidebar did not open after clicking its control')
   await page.screenshot({ path: '.test/e2e/evidence/remote-pane.png', fullPage: false }).catch(() => undefined)
 
   // Switch back to this host: the native browser must return.
