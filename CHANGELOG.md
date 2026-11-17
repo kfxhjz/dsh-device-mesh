@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.1.7 - 2026-11-18
+
+### Fixed
+
+- The remote pane no longer swallows the sidebar opener. On the macOS desktop
+  the collapsed sidebar is hidden completely and DSH moves its "Open sidebar"
+  control into the frame's window-chrome seat over the centre column; the pane
+  painted above that seat, so collapsing the sidebar left no visible way back.
+  The pane now sits below the frame's chrome seats, and its title bar keeps
+  clear of the controls.
+
 ## 0.1.6 - 2026-11-15
 
 ### Changed
