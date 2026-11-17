@@ -42,6 +42,7 @@ let closeButton: HTMLButtonElement | null = null
 
 let root: HTMLElement | null = null
 let iframe: HTMLIFrameElement | null = null
+let barNode: HTMLElement | null = null
 let titleNode: HTMLElement | null = null
 let currentDeviceId: string | null = null
 let loaded = false
@@ -68,7 +69,10 @@ function injectStyle(): void {
   if (document.getElementById(STYLE_ID) !== null) return
   const style = h('style', { id: STYLE_ID })
   style.textContent = `
-    [${PANE_ATTR}] { position: fixed; z-index: 40; display: flex; flex-direction: column; background: var(--dsw-alias-bg-base, #fff); }
+    /* Content, not chrome: stay below the frame's window-chrome seats so the
+       collapsed-sidebar opener keeps working (ui-layout leadingSeat z-index 15)
+       and above the column drag handles (11) and the right panel (10). */
+    [${PANE_ATTR}] { position: fixed; z-index: 14; display: flex; flex-direction: column; background: var(--dsw-alias-bg-base, #fff); }
     [${PANE_ATTR}][hidden] { display: none; }
     .dm-remote-pane-bar { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 0 12px; border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(127,127,127,.2)); font: 13px/1.4 var(--dsw-font-family, system-ui); }
     .dm-remote-pane-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -113,6 +117,28 @@ function centerHost(): Element | null {
   return document.querySelector(CENTER_SELECTOR)
 }
 
+/**
+ * Keep the pane's own bar clear of the frame's window-chrome seat.
+ *
+ * With the sidebar fully hidden on macOS, ui-layout mounts the sidebar opener
+ * over the centre column's top-left corner. The pane deliberately sits below
+ * that seat, so the bar's title has to move aside instead of sitting under the
+ * controls.
+ * @param hostRect - the centre column the pane covers.
+ */
+function syncBarInset(hostRect: DOMRect): void {
+  if (barNode === null) return
+  let inset = 12
+  const seat = document.querySelector('[data-shell-leading]')
+  if (seat !== null) {
+    const rect = seat.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      inset = Math.max(inset, Math.round(rect.right - hostRect.left) + 12)
+    }
+  }
+  barNode.style.paddingLeft = `${inset}px`
+}
+
 function updateBounds(): void {
   if (root === null) return
   const host = centerHost()
@@ -123,6 +149,7 @@ function updateBounds(): void {
   root.style.top = `${Math.round(rect.top)}px`
   root.style.width = `${Math.round(rect.width)}px`
   root.style.height = `${Math.round(rect.height)}px`
+  syncBarInset(rect)
 }
 
 function postNewSession(request: RemoteNewSessionRequest): void {
@@ -194,8 +221,9 @@ function mount(): boolean {
       scheduleSessionMessages()
     })
     loadingNode = h('div', { class: 'dm-remote-pane-loading', role: 'status' }, paneStrings.loading)
+    barNode = h('div', { class: 'dm-remote-pane-bar' }, titleNode, h('span', { class: 'dm-remote-pane-spacer' }), reloadButton, externalButton, closeButton)
     root = h('div', { [PANE_ATTR]: '', role: 'region', 'aria-label': paneStrings.ariaLabel },
-      h('div', { class: 'dm-remote-pane-bar' }, titleNode, h('span', { class: 'dm-remote-pane-spacer' }), reloadButton, externalButton, closeButton),
+      barNode,
       iframe,
       loadingNode)
     window.addEventListener('message', (event) => {

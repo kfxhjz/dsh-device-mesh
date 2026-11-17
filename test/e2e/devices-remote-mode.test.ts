@@ -263,6 +263,45 @@ test('switching to a remote host mirrors its workspaces in the sidebar', { timeo
     10_000, () => 'the remote right sidebar did not open after clicking its control')
   await page.screenshot({ path: '.test/e2e/evidence/remote-pane.png', fullPage: false }).catch(() => undefined)
 
+  // macOS desktop hides the collapsed sidebar completely and moves the sidebar
+  // opener into the frame's window-chrome seat, over the centre column the pane
+  // covers. Regression: the pane used to paint above that seat (z-index 40 vs
+  // 15), so collapsing the sidebar left no visible way to open it again.
+  await page.evaluate(() => {
+    document.documentElement.dataset.platform = 'darwin'
+    document.documentElement.setAttribute('data-fullscreen', '')
+  })
+  await page.locator('[data-sidebar-toggle]').first().click()
+  await waitFor(async () => (await page.locator('[data-sidebar-opener]').count()) > 0 ? true : undefined,
+    10_000, () => 'the collapsed macOS sidebar did not mount its opener')
+  // Bounds follow the centre column on the pane's own 500ms tick; wait for the
+  // pane to reach the collapsed edge before judging what is on top.
+  const paneLeft = async (): Promise<number> => await page.evaluate(() => {
+    const pane = document.querySelector<HTMLElement>('[data-device-mesh-remote-pane]')
+    return pane === null ? -1 : pane.getBoundingClientRect().left
+  })
+  await waitFor(async () => (await paneLeft()) < 1 ? true : undefined,
+    5_000, () => 'the remote pane did not expand over the collapsed sidebar')
+  const openerHit = await page.evaluate(() => {
+    const opener = document.querySelector('[data-sidebar-opener]')
+    if (!(opener instanceof HTMLElement)) return 'missing'
+    const rect = opener.getBoundingClientRect()
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+    return hit === null ? 'none' : `${hit.tagName}.${typeof (hit as HTMLElement).className === 'string' ? (hit as HTMLElement).className : ''}`
+  })
+  assert.ok(!openerHit.includes('dm-remote-pane'), `the remote pane covers the sidebar opener: ${openerHit}`)
+  await page.locator('[data-sidebar-opener]').click({ timeout: 5_000 })
+  const sidebarWidth = async (): Promise<number> => await page.evaluate(() => {
+    const column = document.querySelector<HTMLElement>('[class$="_sidebarCol"]')
+    return column?.getBoundingClientRect().width ?? 0
+  })
+  await waitFor(async () => (await sidebarWidth()) > 100 ? true : undefined,
+    5_000, () => 'the sidebar opener did not reopen the sidebar over the remote pane')
+  await page.evaluate(() => {
+    delete document.documentElement.dataset.platform
+    document.documentElement.removeAttribute('data-fullscreen')
+  })
+
   // Switch back to this host: the native browser must return.
   await page.locator('[data-device-mesh-host-toggle]').click()
   await page.locator('[data-dm-host-id="local"]').click()
