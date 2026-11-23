@@ -253,7 +253,11 @@ describe('portal-daemon: local DSH web proxy', () => {
     })
     try {
       await daemon.prepare()
-      const exchange = await daemon.http({ method: 'GET', path: '/plugins/app.js', headers: {} }, streamOf())
+      const exchange = await daemon.http(
+        { method: 'GET', path: '/plugins/app.js', headers: {} },
+        streamOf(),
+        new AbortController().signal,
+      )
       assert.equal(exchange.status, 200)
       // The gzip wrapper the daemon applies to text assets re-throws the
       // generator's MeshRpcError here; through the real mesh it reaches the
