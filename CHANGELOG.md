@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.1.8 - 2026-11-23
+
 ### Fixed
 
 - A remote DSH response that the daemon's local DSH cut off mid-body no longer
