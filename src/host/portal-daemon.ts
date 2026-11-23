@@ -18,7 +18,6 @@
  * hop-by-hop headers.
  */
 
-import { Readable } from 'node:stream'
 import { createGzip } from 'node:zlib'
 
 import { WebSocket } from 'ws'
@@ -568,7 +567,7 @@ export class PortalDaemon {
     const sanitized = sanitizeUpstreamResponseHeaders(resultHeaders)
     let resultBody: ChunkStream = this.streamFromWeb(response)
     if (status === 200 && this.compressible(sanitized['content-type'])) {
-      resultBody = Readable.from(resultBody).pipe(createGzip({ level: 6 }))
+      resultBody = gzipChunks(resultBody)
       sanitized['content-encoding'] = 'gzip'
     }
     this.lastErrorValue = undefined
@@ -1056,13 +1055,86 @@ export class PortalDaemon {
     const reader = body.getReader()
     try {
       for (;;) {
-        const { done, value } = await reader.read()
-        if (done) return
-        if (value !== undefined) yield value
+        let next: ReadableStreamReadResult<Uint8Array>
+        try {
+          next = await reader.read()
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error)
+          this.lastErrorValue = detail
+          this.logger.warn(`device-mesh: local DSH portal response failed mid-body: ${detail}`)
+          throw new MeshRpcError('portal/upstream-error', `local DSH response failed: ${detail}`)
+        }
+        if (next.done) return
+        if (next.value !== undefined) yield next.value
       }
     } finally {
-      await reader.cancel().catch(() => {})
+      await reader.cancel().catch(() => undefined)
     }
+  }
+}
+
+/**
+ * Gzip one response body chunk by chunk.
+ *
+ * A plain `Readable.from(...).pipe(createGzip())` chain ends the gzip side
+ * gracefully after a source failure, so an upstream reset would look like a
+ * complete body to the controller (a truncated asset accepted by the browser,
+ * reported as a successful call). Propagate the source error instead.
+ */
+async function* gzipChunks(source: ChunkStream): AsyncGenerator<Uint8Array> {
+  const gzip = createGzip({ level: 6 })
+  // zlib emits `data` only with a flowing consumer; collect it here and hand
+  // the compressed bytes to the Mesh in arrival order.
+  const ready: Uint8Array[] = []
+  let wake: (() => void) | undefined
+  let finished = false
+  let failure: unknown
+  gzip.on('data', (chunk: Buffer) => {
+    ready.push(chunk)
+    wake?.()
+    wake = undefined
+  })
+  gzip.on('error', (error: Error) => {
+    failure = error
+    finished = true
+    wake?.()
+    wake = undefined
+  })
+  gzip.on('end', () => {
+    finished = true
+    wake?.()
+    wake = undefined
+  })
+  const settle = (): Promise<void> => new Promise<void>((resolve) => {
+    wake = resolve
+  })
+  const pump = (async () => {
+    try {
+      for await (const chunk of source) {
+        if (failure !== undefined) throw failure
+        if (!gzip.write(chunk)) await new Promise<void>((resolve) => { gzip.once('drain', () =>{  resolve() }) })
+      }
+      gzip.end()
+    } catch (error) {
+      // The source failed mid-body: stop the compressor and re-raise, so the
+      // stream aborts instead of completing with a truncated body.
+      failure = error
+      finished = true
+      gzip.destroy()
+      wake?.()
+      wake = undefined
+    }
+  })()
+  try {
+    for (;;) {
+      while (ready.length > 0) yield ready.shift() as Uint8Array
+      if (failure !== undefined) throw failure
+      if (finished) return
+      await settle()
+    }
+  } finally {
+    gzip.destroy()
+    await pump.catch(() => undefined)
   }
 }
 

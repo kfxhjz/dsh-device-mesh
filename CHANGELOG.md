@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- A remote DSH response that the daemon's local DSH cut off mid-body no longer
+  looks complete to the controller's browser. The daemon re-streamed text
+  assets through `Readable.from(...).pipe(createGzip())`, whose gzip side ends
+  gracefully after a source failure, so a truncated plugin bundle or JSON answer
+  reached the remote page as a normally ended body (white remote SPA, a
+  truncated answer reported as success). The body is now gzipped chunk by chunk
+  with the source error propagated, which aborts the Mesh stream instead.
+- A replayable portal request (page/asset GET, and the remote page's WebSocket
+  upgrade) now waits for a reconnect that a dropped relay link started: 2 s
+  before the first attempt and 8 s per retry, and only a lost session is
+  retried. When the reconnect does not land in time, the portal answers
+  `503` with `retry-after: 1` for a not-yet-started response instead of `502`,
+  so the browser retries the same request instead of rendering a dead page.
+- A streamed portal response whose Mesh session dies mid-body now destroys the
+  browser socket instead of ending the response cleanly, so a half-delivered
+  asset fails visibly rather than being accepted as complete.
+
 ## 0.1.7 - 2026-11-18
 
 ### Fixed

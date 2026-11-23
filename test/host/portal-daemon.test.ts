@@ -220,6 +220,58 @@ describe('portal-daemon: local DSH web proxy', () => {
     }
   })
 
+  it('surfaces an upstream reset mid-body instead of ending the response silently', async () => {
+    // A truncated body that ends with a normal `end` would look complete to the
+    // controller's browser (white remote SPA, half a plugin bundle). The daemon
+    // must abort the exchange with portal/upstream-error instead.
+    let calls = 0
+    const server = createServer((request: IncomingMessage, response: ServerResponse) => {
+      calls += 1
+      if (request.url?.includes('token=')) {
+        response.writeHead(303, { location: './', 'set-cookie': 'dsh-auth-abc123=the-secret-cookie; Path=/' })
+        response.end()
+        return
+      }
+      if (request.headers.cookie !== 'dsh-auth-abc123=the-secret-cookie') {
+        response.writeHead(401)
+        response.end()
+        return
+      }
+      response.writeHead(200, { 'content-type': 'text/javascript' })
+      response.write('partial-bundle')
+      // Drop the connection before the body completes.
+      setTimeout(() =>{  response.destroy() }, 20)
+    })
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+    server.unref()
+    const address = server.address() as AddressInfo
+    const origin = `http://127.0.0.1:${String(address.port)}`
+    const daemon = new PortalDaemon({
+      origin,
+      requestTimeoutMs: 5_000,
+      getService: name => (name === 'connection' ? fakeConnection(origin) : undefined),
+    })
+    try {
+      await daemon.prepare()
+      const exchange = await daemon.http({ method: 'GET', path: '/plugins/app.js', headers: {} }, streamOf())
+      assert.equal(exchange.status, 200)
+      // The gzip wrapper the daemon applies to text assets re-throws the
+      // generator's MeshRpcError here; through the real mesh it reaches the
+      // controller as a stream abort (see portal-controller's mid-body test).
+      let failure: unknown
+      try {
+        await collect(exchange.body)
+      } catch (error) {
+        failure = error
+      }
+      assert.ok(failure instanceof MeshRpcError, `expected a MeshRpcError, got ${String(failure)}`)
+      assert.equal(failure.code, 'portal/upstream-error')
+      assert.ok(calls >= 2)
+    } finally {
+      await new Promise<void>(resolve => server.close(() =>{  resolve() }))
+    }
+  })
+
   it('rejects unsafe paths and unknown methods', async () => {
     const dsh = await startFakeDsh()
     const daemon = new PortalDaemon({

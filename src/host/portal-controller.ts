@@ -57,6 +57,21 @@ const PORTAL_MAX_CONNECTIONS = 256
 /** Bound on receiving request headers before the socket is dropped. */
 const PORTAL_HEADERS_TIMEOUT_MS = 10_000
 
+/**
+ * How long one replayable request waits for an already-closed session before
+ * the first attempt. A reconnect started by the transport close usually lands
+ * within a second, so a short wait saves a page load without stalling a browser
+ * that is genuinely offline.
+ */
+const ASSET_FIRST_WAIT_MS = 2_000
+
+/**
+ * How long a retried replayable request waits for the reconnect to land. The
+ * broker backs off up to its reconnect cap, so this covers a normal relay blip
+ * before the portal answers 503 (with `retry-after`) for the browser to retry.
+ */
+const ASSET_RETRY_WAIT_MS = 8_000
+
 /** Bound on one local HTTP request before the socket is dropped. */
 const PORTAL_REQUEST_TIMEOUT_MS = 30_000
 
@@ -351,7 +366,22 @@ function scriptJson(value: unknown): string {
     .replaceAll('&', '\\u0026')
 }
 
-function statusForError(error: unknown): number {
+/**
+ * Whether one failed exchange was caused by the Mesh session going away
+ * (dropped link, reconnect in progress, adopted session closed) rather than by
+ * the remote DSH answering with an error.
+ *
+ * The multiplexer reports a closed session and a torn-down stream as
+ * `mesh/internal` ("session closed", "stream aborted", a transport message) and
+ * reserves `mesh/busy` for its admission caps, so the code alone is ambiguous;
+ * a live transport close is the authoritative signal a probe can read
+ * synchronously.
+ */
+function sessionLost(error: unknown): boolean {
+  return error instanceof MeshRpcError && error.code === 'mesh/internal'
+}
+
+function statusForError(error: unknown, sessionOpen?: boolean): number {
   if (error instanceof MeshRpcError) {
     switch (error.code) {
       case 'mesh/bad-request':
@@ -368,6 +398,11 @@ function statusForError(error: unknown): number {
         return 503
       case 'portal/upstream-error':
         return 502
+      case 'mesh/internal':
+        // A refused call with nobody listening can only be retried after a
+        // reconnect, which the portal adopts in place; answer with a retryable
+        // status rather than reporting the remote DSH as broken.
+        return sessionOpen === false ? 503 : 502
       default:
         return 502
     }
@@ -903,16 +938,33 @@ export class PortalController {
           if (aborted || response.destroyed) break
           if (!response.write(chunk)) await once(response, 'drain')
         }
+      } catch (error) {
+        // Headers already went out, so the status is fixed. If the reason is a
+        // lost Mesh session, destroy the socket instead of ending it: a clean
+        // FIN would let the browser accept a truncated body (e.g. half of a
+        // plugin bundle), which is exactly the white remote SPA this guards
+        // against. Other mid-body failures keep the old behaviour.
+        this.lastErrorValue = error instanceof Error ? error.message : String(error)
+        if (sessionLost(error)) {
+          this.logger.warn(`device-mesh: portal response cut short (${this.lastErrorValue})`)
+          response.destroy(error instanceof Error ? error : undefined)
+          return
+        }
+        throw error
       } finally {
-        response.end()
+        if (!response.destroyed) response.end()
       }
     } catch (error) {
       this.lastErrorValue = error instanceof Error ? error.message : String(error)
       const code = (error as { code?: unknown }).code
       this.logger.warn(`device-mesh: portal request failed (${typeof code === 'string' ? code : 'error'}): ${this.lastErrorValue}`)
       if (!response.headersSent) {
-        const status = statusForError(error)
-        response.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
+        const status = statusForError(error, this.session.open)
+        const headers: Record<string, string> = { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }
+        // A lost session is transient: the portal adopts the reconnect, so the
+        // browser may retry the same request instead of showing a dead page.
+        if (status === 503) headers['retry-after'] = '1'
+        response.writeHead(status, headers)
         response.end(`${this.lastErrorValue}\n`)
       } else {
         response.destroy()
@@ -994,8 +1046,13 @@ export class PortalController {
     const limit = 12 * 1024 * 1024
     let lastError: unknown
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      if (!this.session.open) await this.waitForOpenSession()
+      // A dropped relay link spends a few seconds reconnecting; wait for that
+      // reconnect instead of failing the page load with "session closed".
+      if (!this.session.open) await this.waitForOpenSession(
+        attempt > 0 ? ASSET_RETRY_WAIT_MS : ASSET_FIRST_WAIT_MS,
+      )
       try {
+        if (!this.session.open) throw new MeshRpcError('mesh/internal', 'device session is reconnecting')
         const exchange = await this.session.http(params, body)
         if (params.method === 'HEAD') {
           return { status: exchange.status, headers: exchange.headers, bytes: new Uint8Array(0) }
@@ -1022,7 +1079,10 @@ export class PortalController {
         }
       } catch (error) {
         lastError = error
-        if (attempt >= 2 || !await this.waitForOpenSession()) break
+        // Only a dead session is worth retrying: a 404 or an upstream error
+        // would answer the same way, and the controller's request budget is
+        // spent on a browser that already timed out.
+        if (attempt >= 2 || !sessionLost(error) || !await this.waitForOpenSession(ASSET_RETRY_WAIT_MS)) break
       }
     }
     throw lastError
@@ -1107,18 +1167,22 @@ export class PortalController {
         compress: true,
       }
       try {
-        if (!this.session.open) await this.waitForOpenSession()
+        // A remote-control page's WebSocket is the session stream: give a
+        // reconnect the same window as a replayable HTTP request before failing
+        // the upgrade, so a relay blip does not reload the remote SPA.
+        if (!this.session.open) await this.waitForOpenSession(ASSET_RETRY_WAIT_MS)
         try {
+          if (!this.session.open) throw new MeshRpcError('mesh/internal', 'device session is reconnecting')
           exchange = await this.session.ws(wsParams)
         } catch (error) {
           // One retry when a reconnect adopted a fresh session meanwhile.
-          if (!await this.waitForOpenSession()) throw error
+          if (!await this.waitForOpenSession(ASSET_RETRY_WAIT_MS)) throw error
           exchange = await this.session.ws(wsParams)
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'remote portal WebSocket failed'
         this.lastErrorValue = message
-        rawHttpResponse(socket, statusForError(error), message)
+        rawHttpResponse(socket, statusForError(error, this.session.open), message)
         return
       }
       if (browserGone || socket.destroyed) {

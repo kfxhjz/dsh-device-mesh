@@ -166,6 +166,14 @@ export class FakeMeshSession implements MeshSession {
     return Date.now()
   }
 
+  /**
+   * Simulate the broker adopting a reconnected session in place (the portal
+   * keeps its capability URL and swaps only the session object).
+   */
+  reopen(): void {
+    this.open = true
+  }
+
   close(): void {
     if (!this.open) return
     this.open = false

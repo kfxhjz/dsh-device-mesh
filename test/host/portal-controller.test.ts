@@ -11,7 +11,7 @@ import { gzipSync, gunzipSync } from 'node:zlib'
 import { WebSocket } from 'ws'
 
 import type { WsExchangeResult } from '../../src/shared/mesh-session.ts'
-import { decodeWsMessage, encodeWsMessage } from '../../src/shared/mesh-session.ts'
+import { MeshRpcError, decodeWsMessage, encodeWsMessage } from '../../src/shared/mesh-session.ts'
 import {
   PortalController,
   injectEmbedShell,
@@ -485,6 +485,95 @@ describe('portal-controller: forwarding', () => {
       assert.equal(exchange.params.method, 'POST')
       assert.equal(exchange.params.path, '/api/save?x=1')
       assert.equal(exchange.body.toString('utf8'), '{"value":42}')
+    } finally {
+      await portal.close()
+    }
+  })
+
+  it('retries a replayable request once the half-open session closes, instead of failing the page load', async () => {
+    // A dropped relay link surfaces as a rejected exchange; the transport close
+    // arrives a moment later and the broker adopts a reconnected session. A
+    // GET must survive that blip rather than answering "session closed".
+    let calls = 0
+    const session = new FakeMeshSession({
+      http: async () => {
+        calls += 1
+        if (calls === 1) {
+          session.close()
+          throw new MeshRpcError('mesh/internal', 'session closed')
+        }
+        return { streamId: 1, status: 200, headers: { 'content-type': 'text/plain' }, body: streamOf('recovered') }
+      },
+    })
+    const portal = await PortalController.open({
+      session,
+      deviceId: 'dm_device',
+      token: 'token',
+      idleTimeoutMs: 60_000,
+    })
+    try {
+      const cookie = cookieFrom(await fetch(portal.url, { redirect: 'manual' }))
+      // Reconnect: the broker hands the portal a fresh session in place.
+      setTimeout(() => session.reopen(), 100)
+      const response = await fetch(`${portal.origin}/assets/app.js`, {
+        headers: { cookie, 'sec-fetch-site': 'same-origin' },
+      })
+      assert.equal(response.status, 200)
+      assert.equal(await response.text(), 'recovered')
+      assert.equal(calls, 2)
+    } finally {
+      await portal.close()
+    }
+  })
+
+  it('answers 503 with retry-after while the device session is still reconnecting', async () => {
+    const session = new FakeMeshSession()
+    session.close()
+    const portal = await PortalController.open({
+      session,
+      deviceId: 'dm_device',
+      token: 'token',
+      idleTimeoutMs: 60_000,
+    })
+    try {
+      const cookie = cookieFrom(await fetch(portal.url, { redirect: 'manual' }))
+      const response = await fetch(`${portal.origin}/assets/app.js`, {
+        headers: { cookie, 'sec-fetch-site': 'same-origin' },
+      })
+      assert.equal(response.status, 503)
+      assert.equal(response.headers.get('retry-after'), '1')
+      assert.equal(session.httpExchanges.length, 0, 'no exchange is attempted on a closed session')
+      await response.text()
+    } finally {
+      await portal.close()
+    }
+  })
+
+  it('cuts the browser connection when the mesh session dies mid-body', async () => {
+    // Headers are already sent, so a clean end would let the browser accept a
+    // truncated asset; destroying the socket makes the load fail visibly.
+    const session = new FakeMeshSession({
+      http: async () => ({
+        streamId: 4,
+        status: 200,
+        headers: { 'content-type': 'application/octet-stream' },
+        body: (async function* () {
+          yield Buffer.from('partial')
+          throw new MeshRpcError('mesh/internal', 'session closed')
+        })(),
+      }),
+    })
+    const portal = await PortalController.open({
+      session,
+      deviceId: 'dm_device',
+      token: 'token',
+      idleTimeoutMs: 60_000,
+    })
+    try {
+      const cookie = cookieFrom(await fetch(portal.url, { redirect: 'manual' }))
+      await assert.rejects(
+        fetch(`${portal.origin}/download.bin`, { headers: { cookie, 'sec-fetch-site': 'same-origin' } }),
+      )
     } finally {
       await portal.close()
     }
