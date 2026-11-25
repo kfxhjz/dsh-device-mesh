@@ -262,8 +262,12 @@ Desktop profile 组装。其他一切——工作区注册表、会话、标题�
    这是同机控制通道，不是跨设备 API。
 2. **本地 DSH origin。** `ctx.webServer.getOrigin()` 返回运行中的 DSH 实例真实的
    scheme、host 与端口；portal 绝不能猜测 `127.0.0.1:3080`。
-3. **本地 DSH 认证。** `ctx.connection.authenticatedUrl(origin)` 返回一个会设置
-   `dsh-auth-*` 浏览器 cookie 的启动 URL。daemon 手动跟随 `303`（自动重定向会隐藏
+3. **本地 DSH 认证。** 自 DSH 0.2.2-rc.2 起 launch token 归 token 认证插件所有，
+   因此 daemon 以 WebServer 为 `this` 采集 `webserver/entry-url`
+   （`ctx.emit(ctx.webServer, 'webserver/entry-url', origin, entries)`），取 origin、
+   挂载路径与唯一 `token` 参数都匹配的条目；更早的 DSH 提供
+   `ctx.connection.authenticatedUrl(origin)`，作为回退继续支持。启动 URL 会设置
+   `dsh-auth-*` 浏览器 cookie。daemon 手动跟随 `303`（自动重定向会隐藏
    `Set-Cookie`），只在内存中保留 `dsh-auth-*` 值，并在接近过期或上游返回 `401` 时
    刷新。它永不写入磁盘、进入日志或经 Mesh 发送。
 
@@ -280,9 +284,10 @@ cookie 客户端。Hop-by-hop 头、`Host`、
 嵌入远程 UI。完整规则见[协议文档 §7](PROTOCOL.zh.md#7-portal-转发)。
 
 这些接口虽然都是公开服务，但对版本敏感。`connection.fetch.register`、
-`webServer.getOrigin`、`authenticatedUrl` 与 `/api` 信任围栏是内部产品契约，不是
-semver API。DSH 升级可能改变签名、cookie 属性、Origin 规则或头名称。每次升级后都要
-重新运行 portal E2E 与手工检查；只通过 typecheck 是不够的。
+`webServer.getOrigin`、`webserver/entry-url` 采集（旧版本回退到
+`connection.authenticatedUrl`）与 `/api` 信任围栏是内部产品契约，不是 semver API。
+DSH 升级可能改变签名、cookie 属性、Origin 规则或头名称。每次升级后都要重新运行
+portal E2E 与手工检查；只通过 typecheck 是不够的。
 
 ## 7. client UI 集成地图
 
@@ -386,7 +391,7 @@ tag 与 `package.json` 版本一致，生成 `SHA256SUMS`，并用 `scripts/rele
 | 插件出现在 `skippedBundles` 中 | `engines.dsh`/peer 范围不匹配，或 `dsh.bundle.platforms` 排除了该 host | 打印跳过原因；只在完成回归检查后放宽范围，或添加显式豁免。 |
 | Loader row 存在但无效 | 更高的 patch 层覆盖/禁用了该行，或某个 override 替换了整个 `config` | 运行 `dsh --profile <profile> --dump-config`；在 override 中重新写全 config。 |
 | `client.js` 变了但页面没变 | HMR 被禁用、时间戳/大小未变，或 manifest 变了 | 确认 `client-hmr` 已启用；touch 构建产物；manifest/patch 变化后重启。 |
-| portal 403/401 或登录循环 | Origin/Host 围栏、缺少受信任 authority、DSH cookie 过期，或 cookie 属性 | 验证回环、`getOrigin()`、`authenticatedUrl()`、`--trusted-host`、TLS 与 portal cookie；见 §6。 |
+| portal 403/401 或登录循环 | Origin/Host 围栏、缺少受信任 authority、DSH cookie 过期，或 cookie 属性 | 验证回环、`getOrigin()`、`webserver/entry-url` 采集（旧版为 `authenticatedUrl()`）、`--trusted-host`、TLS 与 portal cookie；见 §6。 |
 | relay 始终连不上 | endpoint 错误、TLS/Origin 白名单、`serverId` 不匹配，或 relay 不可达 | 检查 `wss://…/ws`、证书与 relay 日志；确认两端共享 `serverId`；持续 `1013` 是容量/准入问题，不是协议问题。 |
 | 直连超时 | 防火墙拦截插件端口，或票据公布了不可达的接口 | 放行 TCP `45871`（或配置的端口）；优先使用 Tailscale；检查票据的端点列表。 |
 | 桌面 portal 窗口/右侧栏显示异常 | 这条路径未自动化 | 在 Electron 中手工验证，并在 pull request 中记录结果。 |

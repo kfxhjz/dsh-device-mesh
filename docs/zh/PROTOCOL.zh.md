@@ -413,8 +413,10 @@ daemon 的 DSH cookie 永不跨 Mesh。
 
 ### 7.4 daemon 侧 DSH 认证
 
-- daemon 通过 `ctx.webServer.getOrigin()` 取得本机 DSH origin，通过
-  `ctx.connection.authenticatedUrl(origin)` 取得浏览器登录 URL。
+- daemon 通过 `ctx.webServer.getOrigin()` 取得本机 DSH origin，并以 WebServer 为
+  `this` 采集 DSH 同步的 `webserver/entry-url` 公告来取得带 launch token 的登录
+  URL——token 认证插件会为它签名。更早的 Host 仍提供
+  `ctx.connection.authenticatedUrl(origin)`，作为回退保留。
 - 手动跟随 `303`（关闭自动重定向）以看到 DSH 的 `Set-Cookie`，然后只在内存中保存
   `dsh-auth-*=<value>`。cookie 接近过期或上游返回 `401` 时刷新一次；失败返回
   `portal/unavailable`。

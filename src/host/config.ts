@@ -197,6 +197,12 @@ export interface HostContextLike {
   readonly get?: (name: string) => unknown
   /** Cordis effect registrar; the host plugin uses it for cleanup. */
   readonly effect?: (callback: () => void | (() => void | Promise<void>), label?: string) => unknown
+  /**
+   * Cordis event dispatch, `emit(thisArg, name, ...args)`. The portal daemon
+   * emits DSH's synchronous `webserver/entry-url` collector to obtain the
+   * launch-token URL of the local Web server.
+   */
+  readonly emit?: (thisArg: unknown, name: string, ...args: unknown[]) => unknown
   readonly [key: string]: unknown
 }
 

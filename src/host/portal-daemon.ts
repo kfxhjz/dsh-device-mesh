@@ -4,10 +4,18 @@
  *
  * Credentials: the local DSH Web UI authenticates browsers with a signed
  * `dsh-auth-*` cookie bound to the listener authority. This module obtains that
- * cookie once via `ctx.connection.authenticatedUrl(ctx.webServer.getOrigin())`
- * (the launch-token URL), follows the 303 without redirect (so the `Set-Cookie`
- * is visible), and keeps `name=value` in memory only. The cookie never crosses
- * the Mesh and never appears in logs or on disk.
+ * cookie once from the launch-token URL of the local Web server, follows the
+ * 303 without redirect (so the `Set-Cookie` is visible), and keeps `name=value`
+ * in memory only. The cookie never crosses the Mesh and never appears in logs
+ * or on disk.
+ *
+ * Which DSH version answers with the launch-token URL:
+ * - DSH >= 0.2.2-rc.2 owns it in the token-authentication plugin, which appends
+ *   its signed entry to the synchronous `webserver/entry-url` collection. The
+ *   daemon emits that collection with the WebServer as `this`, exactly like
+ *   `dsh-client-remote-connection` does.
+ * - Older DSH exposed `connection.authenticatedUrl(origin)`; that remains a
+ *   fallback for as long as the service still provides it.
  *
  * Request hygiene (required by DSH's `/api` fence, see
  * `packages/client/connection/src/api-request-trust.ts`): the proxy dials the
@@ -328,12 +336,74 @@ export interface PortalWebSocket {
   on(event: 'open', listener: () => void): void
 }
 
+/** One `webserver/entry-url` contribution, as DSH's WebServer declares it. */
+export interface DshEntryUrl {
+  /** Output prefix, such as `dsh web`. */
+  readonly label: string
+  /** Complete entry URL, including any credential the provider requires. */
+  readonly url: string
+  /** Whether the application may hand this entry to a browser automatically. */
+  readonly open: boolean
+}
+
+/**
+ * Collect the local DSH Web server's launch-token URL from the providers that
+ * answer DSH's synchronous `webserver/entry-url` collection.
+ *
+ * DSH emits the collection with the WebServer as `this` so provider listeners
+ * participate in the WebServer's isolation; this helper mirrors that call. It
+ * keeps only a URL for the requested origin and mount that carries exactly one
+ * non-empty `token` query parameter, so an unrelated advertisement (or a
+ * credential-free entry) never becomes a login attempt.
+ *
+ * @param ctx - Cordis host context carrying the event bus and WebServer.
+ * @param baseUrl - origin (and mount) the daemon is about to log in to.
+ * @returns the signed launch URL, or `undefined` when no provider supplies one.
+ */
+export function collectDshEntryUrl(ctx: HostContextLike | undefined, baseUrl: string): string | undefined {
+  const emit = ctx?.emit
+  if (typeof emit !== 'function') return undefined
+  const webServer = getHostService(ctx, 'webServer')
+  if (webServer === undefined) return undefined
+  let root: URL
+  try {
+    root = new URL(baseUrl)
+  } catch {
+    return undefined
+  }
+  const entries: DshEntryUrl[] = []
+  try {
+    emit.call(ctx, webServer, 'webserver/entry-url', baseUrl, entries)
+  } catch {
+    // A failing provider must not keep the daemon from trying the legacy API.
+    return undefined
+  }
+  for (const candidate of entries) {
+    if (!isRecord(candidate)) continue
+    const value = candidate['url']
+    if (typeof value !== 'string' || value.length === 0) continue
+    let url: URL
+    try {
+      url = new URL(value)
+    } catch {
+      continue
+    }
+    if (url.origin !== root.origin || url.pathname !== root.pathname) continue
+    if (url.searchParams.getAll('token').length !== 1) continue
+    if (!url.searchParams.get('token')) continue
+    return value
+  }
+  return undefined
+}
+
 /** Options for {@link PortalDaemon}. */
 export interface PortalDaemonOptions {
   /** Cordis host context (preferred). */
   readonly ctx?: HostContextLike
   /** Test seam replacing `ctx.get`. */
   readonly getService?: (name: string) => unknown
+  /** Test seam replacing the `webserver/entry-url` collection. */
+  readonly collectEntryUrl?: (baseUrl: string) => string | undefined
   /** Explicit local DSH origin override (tests). */
   readonly origin?: string | (() => string | undefined)
   readonly logger?: MeshLogger
@@ -419,6 +489,7 @@ function delay(ms: number): Promise<void> {
  */
 export class PortalDaemon {
   private readonly getService: (name: string) => unknown
+  private readonly collectEntryUrl: (baseUrl: string) => string | undefined
   private readonly explicitOrigin: (() => string | undefined) | undefined
   private readonly logger: MeshLogger
   private readonly now: () => number
@@ -438,6 +509,11 @@ export class PortalDaemon {
   constructor(options: PortalDaemonOptions = {}) {
     const getter = options.getService
     this.getService = getter ?? ((name: string) => getHostService(options.ctx, name))
+    const collect = options.collectEntryUrl
+    const ctx = options.ctx
+    this.collectEntryUrl = collect ?? (ctx === undefined
+      ? () => undefined
+      : (baseUrl: string) => collectDshEntryUrl(ctx, baseUrl))
     const originOption = options.origin
     this.explicitOrigin = typeof originOption === 'function'
       ? originOption
@@ -892,26 +968,51 @@ export class PortalDaemon {
     return promise
   }
 
-  private async acquireCookie(): Promise<CookieState> {
-    const origin = this.requireOrigin()
-    const connection = this.service('connection')
-    const authenticatedUrl = serviceFunction(connection, 'authenticatedUrl')
-    if (authenticatedUrl === undefined) {
-      throw new MeshRpcError('portal/unavailable', 'DSH connection.authenticatedUrl is unavailable')
+  /**
+   * Resolve the local DSH Web server's launch-token URL.
+   *
+   * The primary path collects DSH's `webserver/entry-url` advertisement, which
+   * the token-authentication provider signs; the legacy path keeps working on
+   * Hosts that still expose `connection.authenticatedUrl`.
+   *
+   * @param origin - local Web origin to log in to.
+   * @returns a URL carrying exactly that authority and the launch token.
+   */
+  private resolveLaunchUrl(origin: string): string {
+    let collected: string | undefined
+    try {
+      collected = this.collectEntryUrl(origin)
+    } catch {
+      // A provider-side failure degrades to the legacy service lookup.
+      collected = undefined
     }
-    let authUrl: string
+    if (typeof collected === 'string' && collected.length > 0) return collected
+
+    const authenticatedUrl = serviceFunction(this.service('connection'), 'authenticatedUrl')
+    if (authenticatedUrl === undefined) {
+      throw new MeshRpcError(
+        'portal/unavailable',
+        'the local DSH Web server exposes no launch-token login URL'
+          + ' (mount @deepseek-ai/dsh-host-authentication-token and retry)',
+      )
+    }
     try {
       const value = authenticatedUrl(origin)
       if (typeof value !== 'string' || value.length === 0) {
         throw new Error('authenticatedUrl returned no URL')
       }
-      authUrl = value
+      return value
     } catch (error) {
       throw new MeshRpcError(
         'portal/unavailable',
         `could not build the local DSH login URL: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
+  }
+
+  private async acquireCookie(): Promise<CookieState> {
+    const origin = this.requireOrigin()
+    const authUrl = this.resolveLaunchUrl(origin)
     const controller = new AbortController()
     const timeout = setTimeout(() =>{  controller.abort() }, this.prepareTimeoutMs)
     timeout.unref?.()

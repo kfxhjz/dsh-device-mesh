@@ -9,11 +9,12 @@ import { MeshRpcError, decodeWsMessage, encodeWsMessage } from '../../src/shared
 import type { ChunkStream } from '../../src/shared/mesh-session.ts'
 import {
   PortalDaemon,
+  collectDshEntryUrl,
   sanitizeProxyRequestHeaders,
   sanitizeUpstreamResponseHeaders,
   validateProxyPath,
 } from '../../src/host/portal-daemon.ts'
-import type { PortalWebSocket } from '../../src/host/portal-daemon.ts'
+import type { DshEntryUrl, PortalWebSocket } from '../../src/host/portal-daemon.ts'
 import { collect, streamOf } from './helpers.ts'
 
 interface ReceivedRequest {
@@ -528,6 +529,142 @@ describe('portal-daemon: websocket proxy', () => {
     } finally {
       daemon.close()
     }
+  })
+})
+
+describe('portal-daemon: launch-token collection', () => {
+  interface EmittingContext {
+    readonly get: (name: string) => unknown
+    readonly emit: (thisArg: unknown, name: string, ...args: unknown[]) => unknown
+    readonly [key: string]: unknown
+  }
+
+  function collectionContext(
+    entries: readonly Partial<DshEntryUrl>[] | undefined,
+    options: { readonly throwOnEmit?: boolean; readonly webServer?: unknown } = {},
+  ): { readonly ctx: EmittingContext & { readonly webServer?: unknown }; readonly calls: unknown[][] } {
+    const calls: unknown[][] = []
+    const webServer = 'webServer' in options ? options.webServer : { getOrigin: () => 'http://127.0.0.1:3080' }
+    const ctx = {
+      webServer,
+      get: (name: string) => (name === 'webServer' ? webServer : undefined),
+      emit: (thisArg: unknown, name: string, ...args: unknown[]) => {
+        calls.push([thisArg, name, ...args])
+        if (options.throwOnEmit === true) throw new Error('provider failed')
+        if (name === 'webserver/entry-url') {
+          const table = args[1] as DshEntryUrl[]
+          for (const entry of entries ?? []) table.push(entry as DshEntryUrl)
+        }
+        return undefined
+      },
+    }
+    return { ctx, calls }
+  }
+
+  it('returns the signed entry for the requested origin and keeps the dispatch contract', () => {
+    const { ctx, calls } = collectionContext([
+      { label: 'anonymous', url: 'http://127.0.0.1:3080/', open: false },
+      { label: 'elsewhere', url: 'http://127.0.0.1:9999/?token=other', open: true },
+      { label: 'dsh web', url: 'http://127.0.0.1:3080/?token=launch-token', open: true },
+    ])
+    assert.equal(collectDshEntryUrl(ctx, 'http://127.0.0.1:3080'), 'http://127.0.0.1:3080/?token=launch-token')
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0]?.[0], ctx.webServer, 'emits with the WebServer as this')
+    assert.equal(calls[0]?.[1], 'webserver/entry-url')
+    assert.equal(calls[0]?.[2], 'http://127.0.0.1:3080')
+  })
+
+  it('keeps the requested mount path', () => {
+    const { ctx } = collectionContext([
+      { label: 'root', url: 'http://127.0.0.1:3080/?token=root', open: true },
+      { label: 'mount', url: 'http://127.0.0.1:3080/dsh?token=mounted', open: true },
+    ])
+    assert.equal(collectDshEntryUrl(ctx, 'http://127.0.0.1:3080/dsh'), 'http://127.0.0.1:3080/dsh?token=mounted')
+  })
+
+  it('rejects ambiguous or credential-free advertisements', () => {
+    const { ctx } = collectionContext([
+      { label: 'two tokens', url: 'http://127.0.0.1:3080/?token=a&token=b', open: true },
+      { label: 'empty token', url: 'http://127.0.0.1:3080/?token=', open: true },
+      { label: 'no token', url: 'http://127.0.0.1:3080/', open: true },
+      { label: 'not a url', url: 'http://[', open: true },
+    ])
+    assert.equal(collectDshEntryUrl(ctx, 'http://127.0.0.1:3080'), undefined)
+  })
+
+  it('degrades when the context cannot or will not collect', () => {
+    assert.equal(collectDshEntryUrl(undefined, 'http://127.0.0.1:3080'), undefined)
+    assert.equal(
+      collectDshEntryUrl({ get: () => undefined, emit: () => undefined }, 'http://127.0.0.1:3080'),
+      undefined,
+      'no WebServer',
+    )
+    assert.equal(
+      collectDshEntryUrl(collectionContext([{ url: 'http://127.0.0.1:3080/?token=x', open: true }], {
+        throwOnEmit: true,
+      }).ctx, 'http://127.0.0.1:3080'),
+      undefined,
+      'provider failure',
+    )
+    assert.equal(
+      collectDshEntryUrl(collectionContext([]).ctx, 'not a url'),
+      undefined,
+      'invalid base URL',
+    )
+  })
+
+  it('wires the collection through the Cordis context', async () => {
+    const dsh = await startFakeDsh()
+    const webServer = { getOrigin: () => dsh.origin }
+    const daemon = new PortalDaemon({
+      origin: dsh.origin,
+      ctx: {
+        get: name => (name === 'webServer' ? webServer : undefined),
+        emit: (_thisArg: unknown, name: string, ...args: unknown[]) => {
+          if (name !== 'webserver/entry-url') return
+          const entries = args[1] as DshEntryUrl[]
+          entries.push({ label: 'dsh web', url: `${dsh.origin}/?token=ctx-token`, open: true })
+        },
+      },
+    })
+    try {
+      assert.deepEqual(await daemon.prepare(), { ok: true })
+      const loginRequests = dsh.received.filter(request => request.url.includes('token='))
+      assert.equal(loginRequests.length, 1)
+      assert.equal(loginRequests[0]?.url, '/?token=ctx-token')
+    } finally {
+      await dsh.close()
+    }
+  })
+
+  it('prefers the collected launch URL over the legacy service method', async () => {
+    const dsh = await startFakeDsh()
+    const daemon = new PortalDaemon({
+      origin: dsh.origin,
+      collectEntryUrl: base => `${base}/?token=collected-token`,
+      getService: name => (name === 'connection' ? fakeConnection(dsh.origin) : undefined),
+    })
+    try {
+      assert.deepEqual(await daemon.prepare(), { ok: true })
+      const loginRequests = dsh.received.filter(request => request.url.includes('token='))
+      assert.equal(loginRequests.length, 1)
+      assert.equal(loginRequests[0]?.url, '/?token=collected-token')
+    } finally {
+      await dsh.close()
+    }
+  })
+
+  it('fails closed with a diagnostic when no provider supplies a login URL', async () => {
+    const daemon = new PortalDaemon({ origin: 'http://127.0.0.1:1', getService: () => undefined })
+    await assert.rejects(
+      daemon.prepare(),
+      (error: unknown) => {
+        assert.ok(error instanceof MeshRpcError)
+        assert.equal(error.code, 'portal/unavailable')
+        assert.match(error.message, /launch-token/u)
+        return true
+      },
+    )
   })
 })
 

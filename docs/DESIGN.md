@@ -171,7 +171,8 @@ Controller side:
 Daemon side:
 
 - Obtains the local DSH origin via `ctx.webServer.getOrigin()` and a browser
-  session via `ctx.connection.authenticatedUrl(origin)`, following the `303`
+  session from DSH's `webserver/entry-url` launch URL (falling back to
+  `ctx.connection.authenticatedUrl(origin)` on older Hosts), following the `303`
   manually so the `dsh-auth-*` cookie is visible.
 - Keeps that cookie in memory only, refreshes it near expiry or after `401`, and
   never sends it over the Mesh; the controller only holds the portal cookie.
@@ -258,8 +259,9 @@ Two DSH seams are essential:
   the handler on DSH's cookie-authenticated `/api` channel; the browser cannot
   reach it without a DSH owner session.
 - **Local Web authentication.** `ctx.webServer.getOrigin()` gives the origin and
-  `ctx.connection.authenticatedUrl(origin)` returns a launch URL that sets a
-  `dsh-auth-*` cookie; the portal daemon follows the redirect manually.
+  DSH's `webserver/entry-url` collection returns the launch-token URL that sets a
+  `dsh-auth-*` cookie (older Hosts answer `ctx.connection.authenticatedUrl`); the
+  portal daemon follows the redirect manually.
 
 Workspace metadata comes from `ctx.workspaceRegistry`, `ctx.sessions`,
 `ctx.sessionTitle` and `ctx.agents`, accessed defensively: a missing service

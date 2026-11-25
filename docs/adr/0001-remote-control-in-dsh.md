@@ -75,8 +75,9 @@ It is explicitly not **C**, a second DSH client tree in the local renderer.
 
 - **Owner-level portal access.** A product decision; the docs must say so, and
   pairing must stay explicit and revocable.
-- **Version-sensitive portal auth.** Depends on `getOrigin`, `authenticatedUrl`
-  and the DSH cookie/Origin fence; every DSH upgrade needs a regression pass.
+- **Version-sensitive portal auth.** Depends on `getOrigin`, the
+  `webserver/entry-url` launch URL (legacy `authenticatedUrl` on older Hosts) and
+  the DSH cookie/Origin fence; every DSH upgrade needs a regression pass.
 - **No deep links.** v1 opens the remote home page; remote work happens in a
   portal tab (or right sidebar), local work in the native shell.
 - **Relay availability.** It sees metadata and can deny service or replace a

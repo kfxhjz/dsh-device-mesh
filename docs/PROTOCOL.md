@@ -431,8 +431,11 @@ origin. The daemon's DSH cookie never crosses the Mesh.
    a stable code, and the daemon closes upstream with `1000`/`1011`.
 
 ### 7.4 Daemon-side DSH authentication
-- The daemon gets its local origin from `ctx.webServer.getOrigin()` and an
-  authenticated launch URL from `ctx.connection.authenticatedUrl(origin)`.
+- The daemon gets its local origin from `ctx.webServer.getOrigin()` and a
+  launch-token login URL by collecting DSH's synchronous `webserver/entry-url`
+  advertisement with the WebServer as `this` — the token-authentication provider
+  signs the entry. Hosts that predate that provider still answer
+  `ctx.connection.authenticatedUrl(origin)`, which remains a fallback.
 - It follows the resulting `303` manually so the DSH `Set-Cookie` is visible, then
   keeps only `dsh-auth-*=<value>` in memory. The cookie is refreshed near expiry
   or after an upstream `401`, with one retry; failure returns `portal/unavailable`.

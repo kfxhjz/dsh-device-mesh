@@ -161,8 +161,9 @@ controller 侧：
 
 daemon 侧：
 
-- 通过 `ctx.webServer.getOrigin()` 取本机 DSH origin，通过
-  `ctx.connection.authenticatedUrl(origin)` 取浏览器会话；手动跟随 `303`，以看到
+- 通过 `ctx.webServer.getOrigin()` 取本机 DSH origin，从 DSH 的
+  `webserver/entry-url` 启动 URL 取浏览器会话（旧版 Host 回退到
+  `ctx.connection.authenticatedUrl(origin)`）；手动跟随 `303`，以看到
   `dsh-auth-*` cookie。
 - cookie 只在内存中，接近过期或遇到 `401` 时刷新，永不跨 Mesh 传输；controller
   浏览器只持有 portal 自己的 cookie。
@@ -253,9 +254,10 @@ portal cookie；任一端的本机恶意软件不在威胁模型内；DSH 升级
   '/api/device-mesh', methods: ['POST'], requestBody: 'buffered', fetch })` 把
   handler 挂到 DSH 经 cookie 认证的同源 `/api` 通道；没有 DSH owner 会话就到不了
   handler。
-- **本机 Web 认证**：`ctx.webServer.getOrigin()` 给出本机 DSH origin；
-  `ctx.connection.authenticatedUrl(origin)` 返回会设置 `dsh-auth-*` cookie 的登录
-  URL。portal daemon 手动跟随重定向并只在内存保存 cookie。
+- **本机 Web 认证**：`ctx.webServer.getOrigin()` 给出本机 DSH origin；DSH 的
+  `webserver/entry-url` 采集返回会设置 `dsh-auth-*` cookie 的启动 URL（旧版 Host
+  回退到 `ctx.connection.authenticatedUrl`）。portal daemon 手动跟随重定向并只在
+  内存保存 cookie。
 
 工作区元数据来自 `ctx.workspaceRegistry`、`ctx.sessions`、`ctx.sessionTitle`、
 `ctx.agents`，全部防御式访问：服务缺失时返回保守结果，而不是让插件激活失败。若

@@ -63,8 +63,9 @@ cookie，并且从不暴露它；浏览器只持有 portal 作用域的能力 co
 ### 成本与风险
 
 - **owner 级 portal 访问。** 这是产品决策；文档必须说明，配对也必须始终显式且可撤销。
-- **对版本敏感的 portal 认证。** 依赖 `getOrigin`、`authenticatedUrl` 和 DSH 的
-  cookie/Origin 围栏；每次 DSH 升级都需要回归检查。
+- **对版本敏感的 portal 认证。** 依赖 `getOrigin`、`webserver/entry-url` 启动 URL
+  （旧版 Host 为 `authenticatedUrl`）和 DSH 的 cookie/Origin 围栏；每次 DSH 升级都
+  需要回归检查。
 - **没有深链。** v1 打开远程首页；远程工作在 portal 标签页（或右侧栏）中进行，本地
   工作在原生 shell 中进行。
 - **relay 可用性。** relay 能看到元数据，也能拒绝服务或替换某个 `serverId` 会话；

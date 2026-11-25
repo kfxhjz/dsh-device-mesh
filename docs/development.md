@@ -271,8 +271,13 @@ defensively and may be absent in a reduced composition. The architectural ration
 2. **Local DSH origin.** `ctx.webServer.getOrigin()` returns the real scheme,
    host and port of the running DSH instance; the portal must not guess
    `127.0.0.1:3080`.
-3. **Local DSH authentication.** `ctx.connection.authenticatedUrl(origin)`
-   returns a launch URL that sets a `dsh-auth-*` browser cookie. The daemon
+3. **Local DSH authentication.** Since DSH 0.2.2-rc.2 the launch token belongs to
+   the token-authentication provider, so the daemon collects
+   `webserver/entry-url` with the WebServer as `this`
+   (`ctx.emit(ctx.webServer, 'webserver/entry-url', origin, entries)`) and keeps
+   the entry whose origin, mount and single `token` parameter match. Older DSH
+   releases expose `ctx.connection.authenticatedUrl(origin)` and remain supported
+   as a fallback. The launch URL sets a `dsh-auth-*` browser cookie. The daemon
    follows the `303` manually (automatic redirects hide `Set-Cookie`), keeps only
    the `dsh-auth-*` value in memory, and refreshes it near expiry or after an
    upstream `401`. It is never written to disk, logged or sent over the Mesh.
@@ -289,9 +294,10 @@ added) so the local page can embed the remote UI. Full rules:
 [PROTOCOL.md §7](PROTOCOL.md#7-portal-forwarding).
 
 These interfaces are version sensitive even though they are public services. `connection.fetch.register`,
-`webServer.getOrigin`, `authenticatedUrl` and the `/api` trust fence are internal product contracts, not a
-semver API. A DSH upgrade can change a signature, cookie attribute, Origin rule or header name. Re-run the
-portal E2E and manual checks after every upgrade; a green typecheck is not enough.
+`webServer.getOrigin`, the `webserver/entry-url` collection (with
+`connection.authenticatedUrl` as the pre-0.2.2 fallback) and the `/api` trust fence are internal product
+contracts, not a semver API. A DSH upgrade can change a signature, cookie attribute, Origin rule or header
+name. Re-run the portal E2E and manual checks after every upgrade; a green typecheck is not enough.
 
 ## 7. Client UI integration map
 
@@ -403,7 +409,7 @@ fixture.
 | Plugin listed in `skippedBundles` | `engines.dsh`/peer range mismatch, or `dsh.bundle.platforms` excludes the host | Print the skipped reason; widen the range only after the regression pass, or add an explicit exemption. |
 | Loader row present but ineffective | A higher patch layer overrides/disables the row, or an override replaces the whole `config` | `dsh --profile <profile> --dump-config`; restate the full config in the override. |
 | `client.js` changed but page did not | HMR disabled, timestamp/size unchanged, or the manifest changed | Confirm `client-hmr` is active; touch the built file; restart after manifest/patch changes. |
-| Portal 403/401 or login loop | Origin/Host fence, missing trusted authority, expired DSH cookie, or cookie attribute | Verify loopback, `getOrigin()`, `authenticatedUrl()`, `--trusted-host`, TLS and the portal cookie; see §6. |
+| Portal 403/401 or login loop | Origin/Host fence, missing trusted authority, expired DSH cookie, or cookie attribute | Verify loopback, `getOrigin()`, the `webserver/entry-url` collection (or legacy `authenticatedUrl()`), `--trusted-host`, TLS and the portal cookie; see §6. |
 | Relay never connects | Wrong endpoint, TLS/Origin allowlist, `serverId` mismatch, or unreachable relay | Check `wss://…/ws`, the certificate and relay logs; confirm both ends share `serverId`; repeated `1013` is capacity/admission, not protocol. |
 | Direct connection times out | Firewall blocks the plugin port, or the ticket advertised an unreachable interface | Allow TCP `45871` (or configured port); prefer Tailscale; check the ticket endpoint list. |
 | Desktop portal window/right sidebar looks wrong | This path is not automated | Verify manually in Electron and note the result in the pull request. |
