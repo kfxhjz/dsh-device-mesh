@@ -21,3 +21,21 @@ export function relayTlsForInput(input: string, toggle: boolean): boolean {
   if (text.startsWith('http://') || text.startsWith('ws://')) return false
   return toggle
 }
+
+/**
+ * Show a stored relay URL as `host[:port]` while preserving custom non-default
+ * pathnames (only omitting empty `/` and the default `/ws`).
+ * @param endpoint - stored relay URL or `null`.
+ * @returns compact display value for the relay input field.
+ */
+export function relayHostDisplay(endpoint: string | null): string {
+  if (endpoint === null) return ''
+  try {
+    const parsed = new URL(endpoint)
+    return parsed.pathname !== '/' && parsed.pathname !== '/ws'
+      ? `${parsed.host}${parsed.pathname}`
+      : parsed.host
+  } catch {
+    return endpoint
+  }
+}

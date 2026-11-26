@@ -331,6 +331,7 @@ const listeners = new Set<() => void>()
 let consumers = 0
 let timer: ReturnType<typeof setInterval> | null = null
 let inFlight: Promise<void> | null = null
+let queuedRefresh: Promise<void> | null = null
 
 function notify(): void {
   for (const listener of listeners) {
@@ -353,8 +354,17 @@ export function getMeshSnapshot(): MeshSnapshot {
 }
 
 /** Refresh `state` from the Host; never rejects (errors land in the snapshot). */
-export function refreshMeshState(): Promise<void> {
-  if (inFlight !== null) return inFlight
+export function refreshMeshState(force = false): Promise<void> {
+  if (inFlight !== null) {
+    if (!force) return queuedRefresh ?? inFlight
+    if (queuedRefresh === null) {
+      queuedRefresh = inFlight.then(() => {
+        queuedRefresh = null
+        return refreshMeshState()
+      })
+    }
+    return queuedRefresh
+  }
   publish({ ...snapshot, loading: true })
   inFlight = (async () => {
     try {
@@ -413,8 +423,17 @@ export function useMeshSnapshot(): MeshSnapshot {
 /** Refresh after a mutation without surfacing a second error path. */
 async function mutate<T>(endpoint: string, payload?: unknown): Promise<T> {
   const value = await callEndpoint<T>(endpoint, payload)
-  void refreshMeshState()
+  void refreshMeshState(true)
   return value
+}
+
+/** Keep `snapshot.state.portals` immediately aligned after open/close mutations. */
+function installPortalUrl(deviceId: string, url: string | null): void {
+  const state = snapshot.state
+  if (state === null) return
+  const others = state.portals.filter(portal => portal.deviceId !== deviceId)
+  const portals = url === null ? others : [...others, { deviceId, url }]
+  publish({ ...snapshot, state: { ...state, portals } })
 }
 
 /**
@@ -520,10 +539,13 @@ export const meshApi = {
     return isRecord(result) && result.opened === true
   },
   async openPortal(deviceId: string): Promise<string> {
-    return normalizePortalUrl(await mutate<unknown>('portal.open', { deviceId }))
+    const url = normalizePortalUrl(await mutate<unknown>('portal.open', { deviceId }))
+    installPortalUrl(deviceId, url)
+    return url
   },
   async closePortal(deviceId: string): Promise<void> {
     await mutate<unknown>('portal.close', { deviceId })
+    installPortalUrl(deviceId, null)
   },
   async configureDirect(enabled: boolean, port?: number): Promise<void> {
     await mutate<unknown>('direct.configure', port === undefined ? { enabled } : { enabled, port })

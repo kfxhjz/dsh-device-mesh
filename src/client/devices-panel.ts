@@ -15,7 +15,8 @@ import { meshApi, refreshMeshState, useMeshSnapshot } from './api.js'
 import { consumeAddHostRequest, setSelectedHost, useAddHostRequests, useSelectedHost } from './host-store.js'
 import { AddDeviceDialog, PendingPairingsCard } from './pairing.js'
 import { qrDataUrl } from './qr.js'
-import { relayTlsForInput } from './relay-endpoint.js'
+import { relayHostDisplay, relayTlsForInput } from './relay-endpoint.js'
+import { canShowRemotePane } from './remote-pane.js'
 import type { Translate } from './types.js'
 import {
   Button, CopyButton, DeviceMeshGlyph, ExternalGlyph, KeyValue, RefreshGlyph, Spinner, StatusLine,
@@ -37,14 +38,65 @@ export interface DevicesPanelProps {
   readonly openRemotePane?: (deviceId: string, deviceName: string, url: string, sessionId?: string) => boolean
 }
 
-/** Best-effort destructive-action confirmation. */
-function confirmAction(message: string): boolean {
-  try {
-    if (typeof window === 'undefined') return true
-    return window.confirm(message)
-  } catch {
-    return true
+/** Reused across panel mounts while still comfortably unexpired. */
+let cachedPairingTicket: PairingTicket | null = null
+const TICKET_REUSE_MARGIN_MS = 60_000
+
+function reusableTicket(now = Date.now()): PairingTicket | null {
+  if (cachedPairingTicket === null) return null
+  const deadline = Date.parse(cachedPairingTicket.expiresAt)
+  if (!Number.isFinite(deadline) || deadline - now <= TICKET_REUSE_MARGIN_MS) {
+    cachedPairingTicket = null
+    return null
   }
+  return cachedPairingTicket
+}
+
+/** Accessible plugin-owned confirmation dialog (avoids flaky Electron `window.confirm`). */
+function ConfirmModal(props: {
+  readonly t: Translate
+  readonly title: string
+  readonly message: string
+  readonly confirmLabel: string
+  readonly danger?: boolean
+  readonly onCancel: () => void
+  readonly onConfirm: () => void
+}): UiChild {
+  const onCancelRef = useRef(props.onCancel)
+  onCancelRef.current = props.onCancel
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onCancelRef.current()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => { window.removeEventListener('keydown', onKeyDown) }
+  }, [])
+  return el('div',
+    {
+      className: 'dm-modal-backdrop',
+      onClick: (event: { target: unknown; currentTarget: unknown }) => {
+        if (event.target === event.currentTarget) props.onCancel()
+      },
+    },
+    el('div', {
+      className: 'dm-modal dm-modal-narrow',
+      role: 'dialog',
+      'aria-modal': 'true',
+      'aria-label': props.title,
+      onClick: (event: { stopPropagation: () => void }) => { event.stopPropagation() },
+    },
+    el('div', { className: 'dm-modal-head' },
+      el('h2', { className: 'dm-modal-title' }, props.title)),
+    el('div', { className: 'dm-modal-body' },
+      el('p', { className: 'dm-card-sub' }, props.message)),
+    el('div', { className: 'dm-modal-actions' },
+      Button({ variant: 'ghost', autoFocus: true, onClick: props.onCancel, children: props.t('common.cancel') }),
+      Button({
+        variant: props.danger === true ? 'danger' : 'primary',
+        onClick: props.onConfirm,
+        children: props.confirmLabel,
+      }))))
 }
 
 function messageOf(error: unknown): string {
@@ -86,8 +138,13 @@ function QrPlate(props: {
       return null
     }
   }, [props.link])
+  const fallbackDataUrl = useMemo(() => {
+    const svg = props.fallbackSvg?.trim()
+    if (svg === undefined || !svg.startsWith('<svg')) return null
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
+  }, [props.fallbackSvg])
   if (dataUrl !== null) return el('img', { src: dataUrl, alt: props.alt })
-  if (props.fallbackSvg !== undefined) return el('span', { dangerouslySetInnerHTML: { __html: props.fallbackSvg } })
+  if (fallbackDataUrl !== null) return el('img', { src: fallbackDataUrl, alt: props.alt })
   return el('span', { className: 'dm-qr-placeholder' }, props.alt)
 }
 
@@ -158,21 +215,11 @@ function PanelHeader(props: {
   )
 }
 
-/** Show the stored relay URL as just the host[:port] the user typed. */
-function relayHostDisplay(endpoint: string | null): string {
-  if (endpoint === null) return ''
-  try {
-    return new URL(endpoint).host
-  } catch {
-    return endpoint
-  }
-}
-
 /** Context card shown when a remote host is selected in the sidebar. */
 function SelectedHostCard(props: {
   readonly t: Translate
   readonly device: MeshDeviceView
-  readonly busyKey: string | null
+  readonly busyKeys: Readonly<Record<string, true>>
   readonly controlling: boolean
   readonly onOpen: () => void
   readonly onRefresh: () => void
@@ -200,14 +247,14 @@ function SelectedHostCard(props: {
       }),
       Button({
         small: true,
-        busy: props.busyKey === `${device.deviceId}:workspaces`,
+        busy: props.busyKeys[`${device.deviceId}:workspaces`] === true,
         disabled: device.status !== 'online',
         onClick: props.onRefresh,
         children: t('panel.refreshWorkspaces'),
       }),
       device.status === 'online' ? null : Button({
         small: true,
-        busy: props.busyKey === `${device.deviceId}:connect`,
+        busy: props.busyKeys[`${device.deviceId}:connect`] === true,
         disabled: device.revoked,
         onClick: props.onConnect,
         children: t('devices.connect'),
@@ -233,7 +280,7 @@ function SelfCard(props: {
   const [relayServe, setRelayServe] = useState(relay.configured)
   useEffect(() => {
     setRelayEndpoint(relayHostDisplay(relay.endpoint))
-    setRelayUseTls(relay.useTls)
+    setRelayUseTls(relayTlsForInput(relay.endpoint ?? '', relay.useTls))
     setRelayServe(relay.configured)
   }, [relay.endpoint, relay.useTls, relay.configured])
   const trimmed = relayEndpoint.trim()
@@ -431,15 +478,15 @@ interface DeviceActions {
 function DeviceCard(props: {
   readonly t: Translate
   readonly device: MeshDeviceView
-  readonly busyKey: string | null
+  readonly busyKeys: Readonly<Record<string, true>>
   readonly portalUrl: string | undefined
   readonly actions: DeviceActions
 }): UiChild {
   const t = props.t
   const device = props.device
   const key = device.deviceId
-  const busy = (suffix: string): boolean => props.busyKey === `${key}:${suffix}`
-  const anyBusy = props.busyKey !== null && props.busyKey.startsWith(`${key}:`)
+  const busy = (suffix: string): boolean => props.busyKeys[`${key}:${suffix}`] === true
+  const anyBusy = Object.keys(props.busyKeys).some(entry => entry.startsWith(`${key}:`))
   const openDisabled = anyBusy || busy('portal')
   const connectionButton = (): UiChild => {
     if (device.status === 'online') {
@@ -543,12 +590,18 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
   const state = snapshot.state
   const { notice, setNotice } = useTransientNotice()
   const [error, setError] = useState<string | null>(null)
-  const [busyKey, setBusyKey] = useState<string | null>(null)
-  const [ticket, setTicket] = useState<PairingTicket | null>(null)
+  const [busyKeys, setBusyKeys] = useState<Readonly<Record<string, true>>>({})
+  const [ticket, setTicket] = useState<PairingTicket | null>(() => reusableTicket())
   const [ticketLoading, setTicketLoading] = useState(false)
   const [ticketError, setTicketError] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
-  const [portalUrls, setPortalUrls] = useState<Readonly<Record<string, string>>>({})
+  const [pendingConfirm, setPendingConfirm] = useState<{
+    readonly title: string
+    readonly message: string
+    readonly confirmLabel: string
+    readonly danger?: boolean
+    readonly run: () => void
+  } | null>(null)
   const selectedHost = useSelectedHost()
   const addHostRequests = useAddHostRequests()
   useEffect(() => {
@@ -560,44 +613,63 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
     return () => { mounted.current = false }
   }, [])
 
-  const loadTicket = (): void => {
+  const setKeyBusy = (key: string, active: boolean): void => {
+    setBusyKeys((previous) => {
+      if (active) return { ...previous, [key]: true }
+      const next = { ...previous }
+      Reflect.deleteProperty(next, key)
+      return next
+    })
+  }
+
+  const loadTicket = (force = true): void => {
+    if (!force) {
+      const cached = reusableTicket()
+      if (cached !== null) {
+        setTicket(cached)
+        return
+      }
+    }
     setTicketLoading(true)
     setTicketError(null)
     void meshApi.ticket()
-      .then((value) => { if (mounted.current) setTicket(value) })
+      .then((value) => {
+        cachedPairingTicket = value
+        if (mounted.current) setTicket(value)
+      })
       .catch((cause: unknown) => { if (mounted.current) setTicketError(describeError(cause, t)) })
       .finally(() => { if (mounted.current) setTicketLoading(false) })
   }
 
-  // A ticket is cheap and expires quickly: fetch one whenever the panel opens.
+  // Reuse an unexpired pairing ticket across panel remounts; only fetch a new
+  // one when absent, expiring soon, or explicitly refreshed.
   useEffect(() => {
-    loadTicket()
+    loadTicket(false)
   }, [])
 
-
   const runAction = (key: string, action: () => Promise<void>, success?: string): void => {
-    setBusyKey(key)
+    setKeyBusy(key, true)
     setError(null)
     void action()
-      .then(() => { if (success !== undefined) setNotice(success) })
-      .catch((cause: unknown) => { setError(describeError(cause, t)) })
-      .finally(() => { setBusyKey(null) })
-  }
-
-  const savePortalUrl = (deviceId: string, url: string): void => {
-    setPortalUrls(previous => ({ ...previous, [deviceId]: url }))
+      .then(() => { if (mounted.current && success !== undefined) setNotice(success) })
+      .catch((cause: unknown) => { if (mounted.current) setError(describeError(cause, t)) })
+      .finally(() => { if (mounted.current) setKeyBusy(key, false) })
   }
 
   const openRemote = (device: MeshDeviceView): void => {
     const key = `${device.deviceId}:portal`
-    setBusyKey(key)
+    setKeyBusy(key, true)
     setError(null)
-    // Pre-open inside the click gesture; post-RPC window.open stays blank.
-    const pending = openBlankPortalWindow()
+    // Only pre-open a blank popup synchronously when the in-shell pane is unavailable.
+    const pending = props.openRemotePane !== undefined && canShowRemotePane()
+      ? null
+      : openBlankPortalWindow()
     void meshApi.openPortal(device.deviceId)
       .then(async (url) => {
-        savePortalUrl(device.deviceId, url)
-        if (props.openRemotePane?.(device.deviceId, device.name, url) === true) return
+        if (props.openRemotePane?.(device.deviceId, device.name, url) === true) {
+          try { pending?.close() } catch { /* already gone */ }
+          return
+        }
         let opened = props.openRemoteTab === undefined ? false : await props.openRemoteTab(url)
         if (opened) {
           try { pending?.close() } catch { /* already gone */ }
@@ -612,28 +684,27 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
         if (!opened) opened = openPortalWindow(url)
         if (!opened) {
           try { pending?.close() } catch { /* already gone */ }
-          setError(t('devices.portalBlocked'))
+          if (mounted.current) setError(t('devices.portalBlocked'))
         }
       })
       .catch((cause: unknown) => {
         try { pending?.close() } catch { /* already gone */ }
-        setError(t('devices.portalFailed', { message: messageOf(cause) }))
+        if (mounted.current) setError(t('devices.portalFailed', { message: messageOf(cause) }))
       })
-      .finally(() => { setBusyKey(null) })
+      .finally(() => { if (mounted.current) setKeyBusy(key, false) })
   }
 
   const openRemoteInTab = (device: MeshDeviceView): void => {
     const key = `${device.deviceId}:tab`
-    setBusyKey(key)
+    setKeyBusy(key, true)
     setError(null)
     void meshApi.openPortal(device.deviceId)
       .then(async (url) => {
-        savePortalUrl(device.deviceId, url)
         const opened = props.openRemoteTab === undefined ? false : await props.openRemoteTab(url)
-        if (!opened) setError(t('devices.portalBlocked'))
+        if (!opened && mounted.current) setError(t('devices.portalBlocked'))
       })
-      .catch((cause: unknown) => { setError(t('devices.portalFailed', { message: messageOf(cause) })) })
-      .finally(() => { setBusyKey(null) })
+      .catch((cause: unknown) => { if (mounted.current) setError(t('devices.portalFailed', { message: messageOf(cause) })) })
+      .finally(() => { if (mounted.current) setKeyBusy(key, false) })
   }
 
   const actions: DeviceActions = {
@@ -649,9 +720,6 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
     onClosePortal: (device) => {
       runAction(`${device.deviceId}:portal`, async () => {
         await meshApi.closePortal(device.deviceId)
-        setPortalUrls(previous => Object.fromEntries(
-          Object.entries(previous).filter(([deviceId]) => deviceId !== device.deviceId),
-        ))
       })
     },
     onRevoke: (device) => {
@@ -663,14 +731,28 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
         : device.controllable
           ? t('devices.confirmRevokeRemote')
           : t('devices.confirmRevoke')
-      if (!confirmAction(message)) return
-      runAction(`${device.deviceId}:revoke`, async () => { await meshApi.revokeDevice(device.deviceId) },
-        t('devices.revokedNotice', { name: device.name }))
+      setPendingConfirm({
+        title: t('devices.revoke'),
+        message,
+        confirmLabel: t('devices.revoke'),
+        danger: true,
+        run: () => {
+          runAction(`${device.deviceId}:revoke`, async () => { await meshApi.revokeDevice(device.deviceId) },
+            t('devices.revokedNotice', { name: device.name }))
+        },
+      })
     },
     onForget: (device) => {
-      if (!confirmAction(t('devices.confirmForget'))) return
-      runAction(`${device.deviceId}:forget`, async () => { await meshApi.forgetDevice(device.deviceId) },
-        t('devices.removed', { name: device.name }))
+      setPendingConfirm({
+        title: t('devices.forget'),
+        message: t('devices.confirmForget'),
+        confirmLabel: t('devices.forget'),
+        danger: true,
+        run: () => {
+          runAction(`${device.deviceId}:forget`, async () => { await meshApi.forgetDevice(device.deviceId) },
+            t('devices.removed', { name: device.name }))
+        },
+      })
     },
   }
 
@@ -710,7 +792,7 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
     selectedDevice === undefined || !selectedDevice.controllable ? null : el(SelectedHostCard, {
       t,
       device: selectedDevice,
-      busyKey,
+      busyKeys,
       controlling: state.portals.some(portal => portal.deviceId === selectedDevice.deviceId),
       onOpen: () => { openRemote(selectedDevice) },
       onRefresh: () => {
@@ -728,15 +810,23 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
     el(SelfCard, {
       t,
       state,
-      busy: busyKey === 'self',
+      busy: busyKeys.self === true,
       onToggleDirect: (enabled: boolean) => {
-        runAction('self', async () => { await meshApi.configureDirect(enabled) })
+        runAction('self', async () => {
+          await meshApi.configureDirect(enabled)
+          cachedPairingTicket = null
+          if (mounted.current) loadTicket(true)
+        })
       },
       onSaveRelay: (endpoint: string, enabled: boolean, useTls: boolean) => {
-        runAction('self', async () => { await meshApi.configureRelay(endpoint, enabled, useTls) })
+        runAction('self', async () => {
+          await meshApi.configureRelay(endpoint, enabled, useTls)
+          cachedPairingTicket = null
+          if (mounted.current) loadTicket(true)
+        })
       },
     }),
-    el(PairingCard, { t, ticket, loading: ticketLoading, error: ticketError, onRefresh: loadTicket }),
+    el(PairingCard, { t, ticket, loading: ticketLoading, error: ticketError, onRefresh: () => { loadTicket(true) } }),
     el('section', { className: 'dm-card', 'aria-label': t('devices.title') },
       el(CardHead, {
         title: t('devices.title'),
@@ -751,8 +841,8 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
           key: device.deviceId,
           t,
           device,
-          busyKey,
-          portalUrl: portalUrls[device.deviceId],
+          busyKeys,
+          portalUrl: state.portals.find(portal => portal.deviceId === device.deviceId)?.url,
           actions,
         })))),
     addOpen
@@ -769,5 +859,20 @@ export function DevicesPanel(props: DevicesPanelProps): UiChild {
         },
       })
       : null,
+    pendingConfirm === null
+      ? null
+      : el(ConfirmModal, {
+        t,
+        title: pendingConfirm.title,
+        message: pendingConfirm.message,
+        confirmLabel: pendingConfirm.confirmLabel,
+        ...(pendingConfirm.danger === true ? { danger: true } : {}),
+        onCancel: () => { setPendingConfirm(null) },
+        onConfirm: () => {
+          const action = pendingConfirm.run
+          setPendingConfirm(null)
+          action()
+        },
+      }),
   )
 }

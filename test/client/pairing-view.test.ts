@@ -103,8 +103,12 @@ describe('pairing view: plaintext relay warning', () => {
     assert.ok(continueButton, 'the warning must offer "Continue anyway"')
     assert.ok(cancelButton, 'the warning must offer a cancel action')
     assert.equal(cancelButton.props?.autoFocus, true, 'focus must default to the safe choice')
-    ;(continueButton.props?.onClick as () => void)()
-    ;(cancelButton.props?.onClick as () => void)()
+    const onConfirm = continueButton.props?.onClick as (() => void) | undefined
+    const onCancel = cancelButton.props?.onClick as (() => void) | undefined
+    assert.equal(typeof onConfirm, 'function')
+    assert.equal(typeof onCancel, 'function')
+    onConfirm?.()
+    onCancel?.()
     assert.equal(confirmed, 1)
     assert.equal(cancelled, 1)
   })

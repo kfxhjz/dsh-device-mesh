@@ -4,6 +4,8 @@ import { describe, it } from 'node:test'
 import {
   MeshApiError,
   extractPairingLink,
+  getMeshSnapshot,
+  meshApi,
   normalizeDevice,
   normalizePairedDevice,
   normalizePairingInspection,
@@ -11,6 +13,7 @@ import {
   normalizeState,
   normalizeTicket,
   normalizeWorkspaces,
+  refreshMeshState,
 } from '../../src/client/api.ts'
 
 describe('api: workspace normalization', () => {
@@ -220,5 +223,81 @@ describe('api: pairing payload normalization', () => {
     assert.equal(extractPairingLink('no link here'), null)
     assert.equal(extractPairingLink('dsh-mesh://pair?d='), null)
     assert.equal(extractPairingLink(''), null)
+  })
+})
+
+describe('api: refresh chaining and optimistic portal state', () => {
+  it('refreshMeshState(true) runs a fresh post-mutation poll after an in-flight poll', async () => {
+    const previousFetch = Object.getOwnPropertyDescriptor(globalThis, 'fetch')
+    let stateCalls = 0
+    let portals: Array<{ deviceId: string; url: string }> = []
+    let releaseFirst!: () => void
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve })
+    Object.defineProperty(globalThis, 'fetch', {
+      configurable: true,
+      writable: true,
+      value: async (_input: unknown, init?: { body?: unknown }) => {
+        const req = typeof init?.body === 'string' ? JSON.parse(init.body) as { endpoint?: string } : {}
+        if (req.endpoint === 'state') {
+          stateCalls += 1
+          const callNo = stateCalls
+          if (callNo === 1) await firstGate
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            json: async () => ({
+              ok: true,
+              value: {
+                self: { deviceId: 'dm_local', name: 'Local', platform: 'darwin', version: '0.1.9' },
+                direct: { enabled: true, port: 45871, urls: [] },
+                relay: { configured: false, endpoint: null, connected: false, useTls: true },
+                devices: callNo === 1 ? [] : [{ deviceId: 'dm_new', name: 'New', status: 'connecting', controllable: true }],
+                pendingPairings: [],
+                portals,
+              },
+            }),
+          }
+        }
+        if (req.endpoint === 'portal.open') {
+          portals = [{ deviceId: 'dm_new', url: 'http://127.0.0.1:41234/?token=tok1' }]
+          return {
+            ok: true,
+            status: 200,
+            statusText: 'OK',
+            json: async () => ({ ok: true, value: { url: 'http://127.0.0.1:41234/?token=tok1' } }),
+          }
+        }
+        portals = []
+        return {
+          ok: true,
+          status: 200,
+          statusText: 'OK',
+          json: async () => ({ ok: true, value: { closed: true } }),
+        }
+      },
+    })
+    try {
+      const first = refreshMeshState()
+      const forcedA = refreshMeshState(true)
+      const forcedB = refreshMeshState(true)
+      const joined = refreshMeshState()
+      assert.equal(forcedA, forcedB, 'concurrent forced refreshes must coalesce onto one queued poll')
+      assert.equal(joined, forcedA, 'non-forced refresh should join the queued post-mutation poll')
+      releaseFirst()
+      await Promise.all([first, forcedA, forcedB, joined])
+      assert.equal(stateCalls, 2)
+      assert.equal(getMeshSnapshot().state?.devices[0]?.deviceId, 'dm_new')
+
+      const url = await meshApi.openPortal('dm_new')
+      assert.equal(url, 'http://127.0.0.1:41234/?token=tok1')
+      assert.equal(getMeshSnapshot().state?.portals.find(p => p.deviceId === 'dm_new')?.url, url)
+
+      await meshApi.closePortal('dm_new')
+      assert.equal(getMeshSnapshot().state?.portals.find(p => p.deviceId === 'dm_new'), undefined)
+    } finally {
+      if (previousFetch === undefined) Reflect.deleteProperty(globalThis, 'fetch')
+      else Object.defineProperty(globalThis, 'fetch', previousFetch)
+    }
   })
 })

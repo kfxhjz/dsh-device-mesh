@@ -216,6 +216,7 @@ export function AddDeviceDialog(props: {
   const [text, setText] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [awaitingDevice, setAwaitingDevice] = useState<MeshDeviceView | null>(null)
+  const [awaitingReady, setAwaitingReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Set when `pair.inspect` reports a plaintext relay on a non-loopback host.
   // Nothing is pinned or dialed until the operator confirms these URLs.
@@ -242,6 +243,9 @@ export function AddDeviceDialog(props: {
   const startingRef = useRef(false)
   const detectorRef = useRef<BarcodeDetectorLike | null>(null)
   const mounted = useRef(true)
+  const awaitingIdRef = useRef<string | null>(null)
+  const seenAwaitingRef = useRef(false)
+  const seenSasRef = useRef(false)
 
   /** Stop every acquired stream and detach the video element. */
   const stopStreams = (): void => {
@@ -283,18 +287,40 @@ export function AddDeviceDialog(props: {
   }, [props, insecure])
 
   // `pair.complete` returns immediately; the controlled device still has to
-  // approve. Watch `state` until that device turns online or reports an error.
+  // approve. Watch `state` until that device turns online, reports an error,
+  // or is rolled back after a denied/unreachable first-contact attempt.
   useEffect(() => {
     if (awaitingDevice === null) return
-    const live = snapshot.state?.devices.find(device => device.deviceId === awaitingDevice.deviceId)
-    if (live === undefined) return
-    if (live.status === 'online') {
+    const clearAwaiting = (): void => {
+      seenAwaitingRef.current = false
+      seenSasRef.current = false
+      awaitingIdRef.current = null
+      setAwaitingReady(false)
       setAwaitingDevice(null)
+    }
+    const live = snapshot.state?.devices.find(device => device.deviceId === awaitingDevice.deviceId)
+    if (live === undefined) {
+      // Only treat absence as rollback/denial after a fresh successful
+      // post-pair state poll has settled (ignoring `loading: true`, transient
+      // fetch errors, and pre-pair background polls) or once observed live.
+      if ((seenAwaitingRef.current || awaitingReady) && !snapshot.loading && snapshot.error === null && snapshot.state !== null) {
+        const hadSas = seenSasRef.current
+        clearAwaiting()
+        setError(t('pairing.failed', {
+          message: hadSas ? t('pairing.denied') : t('devices.detail.deviceUnreachable'),
+        }))
+      }
+      return
+    }
+    seenAwaitingRef.current = true
+    if (live.sas !== undefined) seenSasRef.current = true
+    if (live.status === 'online') {
+      clearAwaiting()
       props.onPaired(live)
       return
     }
     if (live.status === 'error' || live.status === 'revoked') {
-      setAwaitingDevice(null)
+      clearAwaiting()
       const detail = describeStatusDetail(live.statusDetail, t)
       setError(t('pairing.failed', { message: detail ?? t('pairing.denied') }))
       return
@@ -304,7 +330,7 @@ export function AddDeviceDialog(props: {
     if (live.status === 'connecting' && live.sas !== undefined && live.sas !== awaitingDevice.sas) {
       setAwaitingDevice({ ...awaitingDevice, sas: live.sas })
     }
-  }, [snapshot, awaitingDevice, props, t])
+  }, [snapshot, awaitingDevice, awaitingReady, props, t])
 
   useEffect(() => {
     if (!scanning) return
@@ -447,12 +473,23 @@ export function AddDeviceDialog(props: {
       const result = await meshApi.completePairing(link, {
         confirmInsecure: options.confirmInsecure === true,
       })
-      void refreshMeshState()
       if (!mounted.current) return
       if (result.pairing) {
         // Non-blocking: the daemon still has to approve; the panel shows the
         // waiting state and the dialog follows `state` until it settles.
+        seenAwaitingRef.current = false
+        seenSasRef.current = result.device.sas !== undefined
+        awaitingIdRef.current = result.device.deviceId
+        setAwaitingReady(false)
         setAwaitingDevice(result.device)
+        // `completePairing` already queued a forced refresh via `mutate()`;
+        // awaiting `refreshMeshState()` joins that post-mutation fetch without
+        // issuing a redundant second `state` request.
+        void refreshMeshState().finally(() => {
+          if (mounted.current && awaitingIdRef.current === result.device.deviceId) {
+            setAwaitingReady(true)
+          }
+        })
       } else {
         props.onPaired(result.device)
       }
