@@ -26,7 +26,7 @@ import {
   verify as nodeVerify,
 } from 'node:crypto'
 import type { KeyObject } from 'node:crypto'
-import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import { hostname } from 'node:os'
 
@@ -192,10 +192,14 @@ export function x25519PrivateKeyBytes(pkcs8Base64Url: string): Uint8Array {
     throw new IdentityError('identity/unsupported', 'expected an X25519 private key')
   }
   const der = new Uint8Array(key.export({ format: 'der', type: 'pkcs8' }))
-  if (der.length !== 48) {
-    throw new IdentityError('identity/invalid', 'invalid PKCS#8 private key length')
+  try {
+    if (der.length !== 48) {
+      throw new IdentityError('identity/invalid', 'invalid PKCS#8 private key length')
+    }
+    return new Uint8Array(der.subarray(16, 48))
+  } finally {
+    zeroize(der)
   }
-  return new Uint8Array(der.subarray(16, 48))
 }
 
 function importRawPublicKey(raw: Uint8Array, type: 'ed25519' | 'x25519'): KeyObject {
@@ -359,7 +363,7 @@ export function parseDeviceIdentity(value: unknown): DeviceIdentity {
 /** Validate identity field consistency and that the private keys match the public keys. */
 export function validateIdentityShape(identity: DeviceIdentity): DeviceIdentity {
   if (identity.version !== 1) throw new IdentityError('identity/unsupported', 'unsupported identity version')
-  if (identity.name.length === 0 || identity.name.length > 128) {
+  if (identity.name.length === 0 || identity.name.length > 128 || /[\u0000-\u001f\u007f]/u.test(identity.name)) {
     throw new IdentityError('identity/invalid', 'invalid identity name')
   }
   if (!isPlatform(identity.platform)) throw new IdentityError('identity/invalid', 'invalid identity platform')
@@ -368,8 +372,6 @@ export function validateIdentityShape(identity: DeviceIdentity): DeviceIdentity 
   }
   decodeFixedBytes(identity.signPk, KEY_BYTES, 'Ed25519 public key')
   decodeFixedBytes(identity.dhPk, KEY_BYTES, 'X25519 public key')
-  encodeBase64Url(decodeBase64Url(identity.signSk))
-  encodeBase64Url(decodeBase64Url(identity.dhSk))
   const expectedDeviceId = deviceIdFromSignPublicKey(identity.signPk)
   if (identity.deviceId !== expectedDeviceId) {
     throw new IdentityError('identity/key-mismatch', 'device id does not match signing key')
@@ -434,9 +436,15 @@ export async function saveIdentity(filePath: string, identity: DeviceIdentity): 
   const validated = validateIdentityShape(identity)
   const directory = dirname(filePath)
   await mkdir(directory, { recursive: true, mode: 0o700 })
-  const temporary = `${filePath}.${process.pid}.${Date.now()}.tmp`
+  const temporary = `${filePath}.${process.pid}.${Date.now()}.${nodeRandomBytes(4).toString('hex')}.tmp`
   try {
-    await writeFile(temporary, serializeIdentity(validated), { encoding: 'utf8', mode: 0o600 })
+    const handle = await open(temporary, 'w', 0o600)
+    try {
+      await handle.writeFile(serializeIdentity(validated), 'utf8')
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
     await rename(temporary, filePath)
   } catch (error) {
     try {
