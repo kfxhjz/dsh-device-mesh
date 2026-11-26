@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
 
 import {
@@ -6,6 +7,7 @@ import {
   PAIRING_APPROVAL_TIMEOUT_MS,
   PAIRING_CONNECT_TIMEOUT_MS,
   PAIRING_REQUEST_TTL_MS,
+  PLUGIN_VERSION,
   normalizeRelayEndpoint,
   resolvePluginConfig,
 } from '../../src/host/config.ts'
@@ -60,6 +62,23 @@ describe('config: relay transport security', () => {
       ENV,
     )
     assert.equal(resolved.relay.endpoint, 'ws://127.0.0.1:45871/ws')
+
+    const insecureOptIn = resolvePluginConfig(
+      { relay: { endpoint: 'relay.example.com:8411', useTls: false } },
+      ENV,
+    )
+    assert.equal(insecureOptIn.relay.endpoint, 'ws://relay.example.com:8411/ws')
+    assert.equal(insecureOptIn.relay.useTls, false)
+
+    assert.throws(
+      () => resolvePluginConfig({ relay: { endpoint: 12345 } }, ENV),
+      ConfigValidationError,
+    )
+  })
+
+  it('tracks the package version in PLUGIN_VERSION', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as { version: string }
+    assert.equal(PLUGIN_VERSION, pkg.version)
   })
 })
 

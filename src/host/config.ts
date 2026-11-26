@@ -7,17 +7,33 @@
  * unit-testable without a running DeepSeek Harness.
  */
 
+import { readFileSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 
 import type { DevicePlatform, MeshSettings } from '../shared/protocol.ts'
 import { DEFAULT_DIRECT_PORT } from '../shared/protocol.ts'
 
+declare const __DSH_DEVICE_MESH_VERSION__: string | undefined
+
+function readFallbackPackageVersion(): string {
+  try {
+    const raw = readFileSync(new URL('../../package.json', import.meta.url), 'utf8')
+    const parsed = JSON.parse(raw) as { version?: unknown }
+    if (typeof parsed.version === 'string' && parsed.version.length > 0) return parsed.version
+  } catch {
+    // Bundled builds inject `__DSH_DEVICE_MESH_VERSION__` via esbuild define.
+  }
+  return '0.1.9'
+}
+
 /** Package name; also the Cordis loader row id and client module id. */
 export const PLUGIN_NAME = 'device-mesh'
 
 /** Fallback app version reported in `info` when no config overrides it. */
-export const PLUGIN_VERSION = '0.0.1'
+export const PLUGIN_VERSION: string = typeof __DSH_DEVICE_MESH_VERSION__ === 'string'
+  ? __DSH_DEVICE_MESH_VERSION__
+  : readFallbackPackageVersion()
 
 /** Directory under `$DSH_HOME` holding every durable mesh file. */
 export const MESH_DIR_NAME = 'device-mesh'
@@ -539,8 +555,16 @@ export function resolvePluginConfig(
     throw new ConfigValidationError('direct.port must be <= 65535')
   }
   const directHost = optionalString(direct.host, 'direct.host')
+  const relayUseTlsOption = optionalBoolean(relay.useTls, 'relay.useTls')
+  const relayUseTls = relayUseTlsOption ?? true
+  if (relay.endpoint !== undefined && relay.endpoint !== null && typeof relay.endpoint !== 'string') {
+    throw new ConfigValidationError('relay.endpoint must be a string or null')
+  }
   const relayEndpoint = config.relay !== undefined
-    ? normalizeRelayEndpoint(relay.endpoint as string | null | undefined)
+    ? normalizeRelayEndpoint(relay.endpoint, {
+      useTls: relayUseTls,
+      allowInsecure: relayUseTlsOption === false,
+    })
     : null
 
   return {
@@ -557,7 +581,7 @@ export function resolvePluginConfig(
     },
     relay: {
       endpoint: relayEndpoint,
-      useTls: optionalBoolean(relay.useTls, 'relay.useTls') ?? true,
+      useTls: relayUseTls,
     },
     portal: {
       idleTimeoutMs: optionalPositiveInteger(portal.idleTimeoutMs, 'portal.idleTimeoutMs')
