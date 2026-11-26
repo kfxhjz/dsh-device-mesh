@@ -52,7 +52,7 @@
     "build:host": "node scripts/build.mjs --host",
     "build:client": "node scripts/build.mjs --client",
     "watch": "node scripts/build.mjs --watch",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json --noEmit",
     "test": "node --import tsx --test test/core/*.test.ts test/transport/*.test.ts test/host/*.test.ts test/client/*.test.ts",
     "test:core": "node --import tsx --test \"test/core/*.test.ts\"",
     "test:transport": "node --import tsx --test \"test/transport/*.test.ts\"",

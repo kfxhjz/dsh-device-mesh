@@ -512,13 +512,23 @@ export interface AuditEntry {
 // Small shared helpers (portable, no node builtins)
 // ---------------------------------------------------------------------------
 
+interface BufferConstructorLike {
+  from(input: Uint8Array): { toString(encoding: 'base64'): string }
+  from(input: string, encoding: 'base64'): { toString(encoding: 'binary'): string }
+}
+
+/* v8 ignore next 3 */
+function nodeBufferFallback(): BufferConstructorLike {
+  return (globalThis as { readonly Buffer?: BufferConstructorLike }).Buffer as BufferConstructorLike
+}
+
 /** Base64url encode without padding. */
 export function toBase64Url(bytes: Uint8Array): string {
   let binary = ''
   for (const byte of bytes) binary += String.fromCharCode(byte)
   const base64 = typeof btoa === 'function'
     ? btoa(binary)
-    : /* v8 ignore next */ Buffer.from(bytes).toString('base64')
+    : /* v8 ignore next */ nodeBufferFallback().from(bytes).toString('base64')
   return base64.replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '')
 }
 
@@ -531,7 +541,7 @@ export function fromBase64Url(value: string): Uint8Array | undefined {
   try {
     raw = typeof atob === 'function'
       ? atob(padded)
-      : /* v8 ignore next */ Buffer.from(padded, 'base64').toString('binary')
+      : /* v8 ignore next */ nodeBufferFallback().from(padded, 'base64').toString('binary')
   } catch {
     return undefined
   }

@@ -5,7 +5,7 @@
     "import"
   ],
   "categories": {
-    "correctness": "off"
+    "correctness": "error"
   },
   "options": {
     "typeAware": true,
