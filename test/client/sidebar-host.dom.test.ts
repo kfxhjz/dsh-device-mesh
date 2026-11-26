@@ -5,6 +5,7 @@ import { Window } from 'happy-dom'
 
 import { getMeshSnapshot, refreshMeshState } from '../../src/client/api.ts'
 import { getSelectedHost, setSelectedHost } from '../../src/client/host-store.ts'
+import { disposeRemotePane, externalPortalUrl, remotePaneDevice, showRemotePane } from '../../src/client/remote-pane.ts'
 import { mountSidebarHost } from '../../src/client/sidebar-host.ts'
 
 const STATE = {
@@ -357,6 +358,67 @@ test('remote mirror view options expose archived sessions and archive actions', 
       stopActivity: true,
     })
     assert.equal(document.querySelector('.dm-confirm-dialog'), null, 'the dialog closes after confirming')
+  } finally {
+    teardown()
+  }
+})
+
+test('remote pane strips dm-embed for external URLs and reloads when portal origin changes', () => {
+  setupDom()
+  window.document.body.innerHTML = '<div class="shell_centerCol"></div>'
+  try {
+    assert.equal(
+      externalPortalUrl('http://127.0.0.1:41111/?dm-embed=1&dm-session=s1&dm-new-session=w1&dm-new-session-request=r1'),
+      'http://127.0.0.1:41111/?dm-session=s1',
+    )
+    assert.equal(showRemotePane('dm_remote', 'Studio', 'http://127.0.0.1:41111/?token=t1', 's1'), true)
+    assert.equal(remotePaneDevice(), 'dm_remote')
+    const iframe = document.querySelector<HTMLIFrameElement>('.dm-remote-pane-frame')
+    assert.ok(iframe)
+    assert.match(iframe.src, /^http:\/\/127\.0\.0\.1:41111\//u)
+    // Simulate loaded state, then reopen with a new portal port for the same device.
+    iframe.dispatchEvent(new window.Event('load') as unknown as Event)
+    assert.equal(showRemotePane('dm_remote', 'Studio', 'http://127.0.0.1:42222/?token=t2', 's2'), true)
+    assert.match(iframe.src, /^http:\/\/127\.0\.0\.1:42222\//u, 'new portal port must reload iframe')
+  } finally {
+    disposeRemotePane()
+  }
+})
+
+test('switching to an online remote host refreshes workspaces exactly once', async () => {
+  setupDom()
+  let refreshCount = 0
+  setGlobal('fetch', async (_input: unknown, init?: { body?: unknown }) => {
+    const request = typeof init?.body === 'string'
+      ? JSON.parse(init.body) as { endpoint?: string }
+      : {}
+    if (request.endpoint === 'workspaces.refresh') refreshCount += 1
+    const value = request.endpoint === 'workspaces.refresh'
+      ? STATE.devices[0].remoteWorkspaces
+      : STATE
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ ok: true, value }),
+    }
+  })
+  await refreshMeshState()
+  const teardown = mountSidebarHost({
+    t: (key: string) => key,
+    openDevices: () => {},
+    openPortal: () => {},
+    connectDevice: () => {},
+  })
+  try {
+    const toggle = document.querySelector('[data-device-mesh-host-toggle]')
+    assert.ok(toggle)
+    toggle.dispatchEvent(new window.MouseEvent('click', { bubbles: true }) as unknown as Event)
+    const remoteItem = document.querySelector('[data-dm-host-id="dm_remote"]')
+    assert.ok(remoteItem)
+    remoteItem.dispatchEvent(new window.MouseEvent('click', { bubbles: true }) as unknown as Event)
+    await new Promise<void>(resolve => setTimeout(resolve, 20))
+    assert.equal(refreshCount, 1, 'host switch must issue a single workspaces.refresh')
   } finally {
     teardown()
   }

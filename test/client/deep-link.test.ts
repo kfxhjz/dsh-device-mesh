@@ -140,3 +140,18 @@ test('session navigation accepts only a valid parent-shell message', () => {
   assert.deepEqual(opened, ['s9'])
   assert.deepEqual(started, ['ws-1'])
 })
+
+test('listenForSessionNavigation returns a disposer that removes its message listener', () => {
+  let removed = false
+  const fakeWindow = {
+    addEventListener: () => {},
+    removeEventListener: (name: string) => {
+      if (name === 'message') removed = true
+    },
+    parent: {},
+  }
+  registerWindow(fakeWindow)
+  const dispose = listenForSessionNavigation({ get: () => undefined } as unknown as ClientContext)
+  dispose()
+  assert.equal(removed, true)
+})

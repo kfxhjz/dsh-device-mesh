@@ -1306,7 +1306,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
         }))
         remoteRoot.append(error)
       } else {
-        if (remoteRequestedFor !== device.deviceId) requestRemote(device.deviceId)
+        if (!suppressAutoRefresh && remoteRequestedFor !== device.deviceId) requestRemote(device.deviceId)
         const loading = document.createElement('div')
         loading.className = 'dm-remote-loading'
         loading.textContent = options.t('remote.loading', { name: device.name })
@@ -1455,7 +1455,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     }
     syncNativeMode()
     renderRemote(device)
-    if (device !== undefined) refreshRemoteStatus(device)
+    if (!suppressAutoRefresh && device !== undefined) refreshRemoteStatus(device)
     if (menuOpen && menu !== null) {
       const toggle = bar?.querySelector<HTMLElement>(`[${TOGGLE_ATTR}]`)
       if (toggle !== undefined && toggle !== null) positionMenu(toggle)
@@ -1463,6 +1463,15 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     if (viewMenuOpen && viewMenu !== null && viewButton !== null) {
       positionFloating(viewButton, viewMenu)
     }
+  }
+
+  const onRemoteWheel = (event: WheelEvent): void => {
+    if (remoteHost === null || remoteRoot === null) return
+    if (event.ctrlKey) return
+    const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY
+    if (delta === 0) return
+    event.preventDefault()
+    remoteRoot.scrollTop += delta
   }
 
   const createNodes = (header: HTMLElement): void => {
@@ -1524,6 +1533,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
       remoteRoot.className = 'dm-remote-workspaces'
       remoteRoot.setAttribute(REMOTE_ATTR, '')
       remoteRoot.hidden = true
+      remoteRoot.addEventListener('wheel', onRemoteWheel, { passive: false })
       header.insertAdjacentElement('afterend', remoteRoot)
     }
     renderAll()
@@ -1548,6 +1558,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     ensure()
   }
 
+  let suppressAutoRefresh = false
   const onClickDocument = (event: MouseEvent): void => {
     const target = event.target as Element | null
     if (target === null) return
@@ -1558,33 +1569,44 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
       if (target.closest(`[${VIEW_ATTR}]`) === null) closeViewMenu()
       const hostId = target.closest<HTMLElement>(`[${HOST_ATTR}]`)?.getAttribute(HOST_ATTR)
       if (hostId !== null && hostId !== undefined) {
-        const target = getMeshSnapshot().state?.devices.find(device => device.deviceId === hostId)
+        const targetDevice = getMeshSnapshot().state?.devices.find(device => device.deviceId === hostId)
+        const onlineRemote = hostId !== 'local' && targetDevice?.status === 'online'
         if (hostId === 'local') {
           hideRemotePane()
           remoteActiveSession = null
         }
-        setSelectedHost(hostId)
-        closeMenu()
-        renderAll()
+        // Suppress render-driven refreshes while switching to an online remote
+        // host so only the single forced refresh below fires.
+        suppressAutoRefresh = onlineRemote
+        try {
+          setSelectedHost(hostId)
+          closeMenu()
+          renderAll()
+        } finally {
+          suppressAutoRefresh = false
+        }
         if (hostId !== 'local') {
-          // Always refresh the inventory when entering a host; a cached listing
-          // may predate sessions created on the remote while another host was
-          // selected.
-          remoteRequestedFor = null
-          requestRemote(hostId, true)
+          if (onlineRemote) {
+            // Always refresh the inventory when entering an online host; a
+            // cached listing may predate sessions created while away.
+            requestRemote(hostId, true)
+          }
           // Restore this host's last remote view instead of forcing the Devices
-          // panel; a first-ever visit leaves the local main column untouched.
+          // panel; if switching away from another host's open remote pane with
+          // no remembered session to open, hide the old pane so the wrong host
+          // does not stay on screen.
           const remembered = lastSession(hostId)
-          const targetDevice = getMeshSnapshot().state?.devices.find(device => device.deviceId === hostId)
-          if (remembered !== null && targetDevice?.status === 'online'
+          if (remembered !== null && onlineRemote
             && findRemoteSession(targetDevice, remembered)?.archived !== true) {
             options.openPortal(hostId, remembered)
+          } else if (remotePaneDevice() !== null && remotePaneDevice() !== hostId) {
+            hideRemotePane()
           }
         }
         // An offline host selected from the switcher is expected to come back
         // automatically; the mirror then loads its workspaces when online.
-        if (target !== undefined && target.status !== 'online' && !target.revoked) {
-          options.connectDevice(target.deviceId)
+        if (targetDevice !== undefined && targetDevice.status !== 'online' && !targetDevice.revoked) {
+          options.connectDevice(targetDevice.deviceId)
         }
         return
       }
@@ -1615,19 +1637,16 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
   }
   document.addEventListener('input', onSearchInput, true)
 
-  const onRemoteWheel = (event: WheelEvent): void => {
-    if (remoteHost === null || remoteRoot === null) return
-    const target = event.target
-    if (!(target instanceof Node) || !remoteRoot.contains(target)) return
-    if (event.ctrlKey) return
-    const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY
-    if (delta === 0) return
-    event.preventDefault()
-    remoteRoot.scrollTop += delta
-  }
-  document.addEventListener('wheel', onRemoteWheel, { capture: true, passive: false })
-
-  const observer = new MutationObserver(() => { ensureStructure() })
+  let structureScheduled = false
+  const observer = new MutationObserver(() => {
+    if (disposed || structureScheduled) return
+    if (bar !== null && bar.isConnected && remoteRoot !== null && remoteRoot.isConnected) return
+    structureScheduled = true
+    queueMicrotask(() => {
+      structureScheduled = false
+      ensureStructure()
+    })
+  })
   observer.observe(document.body, { childList: true, subtree: true })
   document.addEventListener('click', onClickDocument, true)
   const unsubscribeMesh = subscribeMesh(() => { ensure(); renderAll() })
@@ -1655,7 +1674,7 @@ export function mountSidebarHost(options: SidebarHostOptions): () => void {
     observer.disconnect()
     document.removeEventListener('click', onClickDocument, true)
     document.removeEventListener('input', onSearchInput, true)
-    document.removeEventListener('wheel', onRemoteWheel, { capture: true })
+    remoteRoot?.removeEventListener('wheel', onRemoteWheel)
     unsubscribeMesh()
     unsubscribeHost()
     window.clearInterval(interval)

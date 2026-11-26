@@ -42,9 +42,26 @@ function newSessionRequest(workspaceId: unknown, requestId: unknown): RemoteNewS
     : { workspaceId: workspace, requestId: request }
 }
 
+/** Unref a Node timer handle when running in tests without requiring `@types/node`. */
+function unrefTimer(timer: unknown): void {
+  if (typeof timer === 'object' && timer !== null && 'unref' in timer) {
+    const candidate = (timer as { unref?: unknown }).unref
+    if (typeof candidate === 'function') candidate.call(timer)
+  }
+}
+
+/** True when running inside an iframe whose parent window can receive postMessage. */
+function hasParentFrame(): boolean {
+  return typeof window !== 'undefined'
+    && window.parent !== undefined
+    && window.parent !== null
+    && window.parent !== window
+    && typeof window.parent.postMessage === 'function'
+}
+
 /** Report a failure the parent can surface; the remote shell itself has no notice. */
 function reportNewSessionFailure(requestId: string, cause: unknown): void {
-  if (typeof window === 'undefined' || window.parent === window) return
+  if (!hasParentFrame()) return
   try {
     window.parent.postMessage({
       source: 'dsh-device-mesh-remote',
@@ -85,25 +102,28 @@ function startSessionNow(ctx: ClientContext, request: RemoteNewSessionRequest): 
  * Start a new Session once `uiWorkspace` is available. Idempotent per request id.
  * @param ctx - client context.
  * @param request - Workspace and dedupe id.
+ * @returns disposer that cancels polling if still pending.
  */
-export function startRemoteSession(ctx: ClientContext, request: RemoteNewSessionRequest): void {
-  if (handledNewSessionIds.has(request.requestId) || pendingNewSessionIds.has(request.requestId)) return
-  if (startSessionNow(ctx, request)) return
+export function startRemoteSession(ctx: ClientContext, request: RemoteNewSessionRequest): () => void {
+  if (handledNewSessionIds.has(request.requestId) || pendingNewSessionIds.has(request.requestId)) return () => {}
+  if (startSessionNow(ctx, request)) return () => {}
   pendingNewSessionIds.add(request.requestId)
   let attempts = 0
+  let stopped = false
   const timer = setInterval(() => {
     attempts += 1
-    if (startSessionNow(ctx, request)) {
-      pendingNewSessionIds.delete(request.requestId)
-      clearInterval(timer)
-      return
-    }
-    if (attempts >= 100) {
-      pendingNewSessionIds.delete(request.requestId)
-      clearInterval(timer)
+    if (startSessionNow(ctx, request) || attempts >= 100) {
+      stop()
     }
   }, 100)
-  timer.unref?.()
+  unrefTimer(timer)
+  const stop = (): void => {
+    if (stopped) return
+    stopped = true
+    pendingNewSessionIds.delete(request.requestId)
+    clearInterval(timer)
+  }
+  return stop
 }
 
 /** Read the deep-linked Session id, if any. */
@@ -160,14 +180,13 @@ export function deepLinkedNewSession(): RemoteNewSessionRequest | null {
 }
 
 /** Navigate to the deep-linked Session or new-Session target once ready. */
-export function openDeepLinkedSession(ctx: ClientContext): void {
+export function openDeepLinkedSession(ctx: ClientContext): () => void {
   const sessionId = deepLinkedSession()
   const newSession = deepLinkedNewSession()
   if (newSession !== null) {
-    startRemoteSession(ctx, newSession)
-    return
+    return startRemoteSession(ctx, newSession)
   }
-  if (sessionId === null) return
+  if (sessionId === null) return () => {}
   let attempts = 0
   const timer = setInterval(() => {
     attempts += 1
@@ -179,13 +198,15 @@ export function openDeepLinkedSession(ctx: ClientContext): void {
     }
     if (attempts >= 100) clearInterval(timer)
   }, 100)
-  timer.unref?.()
+  unrefTimer(timer)
+  return () => { clearInterval(timer) }
 }
 
 /** Switch the embedded remote shell to a Session requested by the parent pane. */
-export function listenForSessionNavigation(ctx: ClientContext): void {
-  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
-  window.addEventListener('message', (event) => {
+export function listenForSessionNavigation(ctx: ClientContext): () => void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return () => {}
+  const pendingCancels = new Set<() => void>()
+  const onMessage = (event: MessageEvent): void => {
     if (event.source !== window.parent) return
     const data = event.data as {
       source?: unknown
@@ -197,7 +218,10 @@ export function listenForSessionNavigation(ctx: ClientContext): void {
     if (data?.source !== 'dsh-device-mesh-parent') return
     if (data.kind === 'new-session') {
       const request = newSessionRequest(data.workspaceId, data.requestId)
-      if (request !== null) startRemoteSession(ctx, request)
+      if (request !== null) {
+        const cancel = startRemoteSession(ctx, request)
+        pendingCancels.add(cancel)
+      }
       return
     }
     if (data.kind !== 'open-session'
@@ -205,12 +229,18 @@ export function listenForSessionNavigation(ctx: ClientContext): void {
     const ui = workspaceNavigation(ctx)
     if (typeof ui?.openSession !== 'function') return
     try { ui.openSession(data.sessionId) } catch { /* the remote Session may be gone */ }
-  })
+  }
+  window.addEventListener('message', onMessage)
+  return () => {
+    window.removeEventListener?.('message', onMessage)
+    for (const cancel of pendingCancels) cancel()
+    pendingCancels.clear()
+  }
 }
 
 /** Tell the parent shell which remote Session is on screen. */
-export function reportRemoteSession(ctx: ClientContext): void {
-  if (typeof window === 'undefined' || window.parent === window) return
+export function reportRemoteSession(ctx: ClientContext): () => void {
+  if (!hasParentFrame()) return () => {}
   let last: string | undefined
   const timer = setInterval(() => {
     const sessions = ctx.get?.('sessions') as { list?: { getSnapshot?: () => { current?: string } } } | undefined
@@ -225,5 +255,6 @@ export function reportRemoteSession(ctx: ClientContext): void {
       }, '*')
     } catch { /* parent is gone */ }
   }, 500)
-  timer.unref?.()
+  unrefTimer(timer)
+  return () => { clearInterval(timer) }
 }

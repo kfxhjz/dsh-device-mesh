@@ -45,6 +45,7 @@ let iframe: HTMLIFrameElement | null = null
 let barNode: HTMLElement | null = null
 let titleNode: HTMLElement | null = null
 let currentDeviceId: string | null = null
+let currentPortalOrigin: string | null = null
 let loaded = false
 let activeSession: string | null = null
 let pendingSession: string | null = null
@@ -53,6 +54,13 @@ let sessionTimers: ReturnType<typeof setTimeout>[] = []
 let loadingNode: HTMLElement | null = null
 let loadingTimer: ReturnType<typeof setTimeout> | undefined
 let keepAlive: ReturnType<typeof setInterval> | undefined
+let boundsObserver: ResizeObserver | null = null
+let observedHost: Element | null = null
+let observedSeat: Element | null = null
+let domObserver: MutationObserver | null = null
+let domSyncScheduled = false
+let resizeBound = false
+let messageHandler: ((event: MessageEvent) => void) | null = null
 
 function h<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -91,6 +99,19 @@ function canEmbed(): boolean {
   return typeof window !== 'undefined'
 }
 
+/** Whether the center-column iframe surface is currently available in the DOM. */
+export function canShowRemotePane(): boolean {
+  return canEmbed() && typeof document !== 'undefined' && centerHost() !== null
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin
+  } catch {
+    return null
+  }
+}
+
 function embedUrl(url: string): string {
   try {
     const parsed = new URL(url)
@@ -101,10 +122,23 @@ function embedUrl(url: string): string {
   }
 }
 
-/** Drop one-shot new-Session params before a reload or an external open. */
+/** Drop one-shot new-Session params before reloading inside the embedded pane. */
 function reloadUrl(url: string): string {
   try {
     const parsed = new URL(url)
+    parsed.searchParams.delete('dm-new-session')
+    parsed.searchParams.delete('dm-new-session-request')
+    return parsed.toString()
+  } catch {
+    return url
+  }
+}
+
+/** Strip embed-only and one-shot params so an external browser tab shows the full remote UI. */
+export function externalPortalUrl(url: string): string {
+  try {
+    const parsed = new URL(url)
+    parsed.searchParams.delete('dm-embed')
     parsed.searchParams.delete('dm-new-session')
     parsed.searchParams.delete('dm-new-session-request')
     return parsed.toString()
@@ -160,7 +194,7 @@ function postNewSession(request: RemoteNewSessionRequest): void {
       kind: 'new-session',
       workspaceId: request.workspaceId,
       requestId: request.requestId,
-    }, '*')
+    }, currentPortalOrigin ?? '*')
   } catch { /* ignore */ }
 }
 
@@ -189,9 +223,88 @@ function scheduleSessionMessages(): void {
         source: 'dsh-device-mesh-parent',
         kind: 'open-session',
         sessionId: pendingSession,
-      }, '*')
+      }, currentPortalOrigin ?? '*')
     } catch { /* ignore */ }
   }, delay))
+}
+
+function syncBoundsObserver(): void {
+  if (boundsObserver === null) return
+  const host = centerHost()
+  const seat = document.querySelector('[data-shell-leading]')
+  if (host === observedHost && seat === observedSeat) return
+  boundsObserver.disconnect()
+  if (host !== null) boundsObserver.observe(host)
+  if (seat !== null) boundsObserver.observe(seat)
+  observedHost = host
+  observedSeat = seat
+}
+
+function syncVisiblePane(): void {
+  if (root === null || root.hidden !== false) return
+  if (!root.isConnected) mount()
+  syncBoundsObserver()
+  updateBounds()
+}
+
+function startBoundsTracking(): void {
+  if (typeof window !== 'undefined' && !resizeBound) {
+    window.addEventListener('resize', syncVisiblePane)
+    resizeBound = true
+  }
+  const host = centerHost()
+  if (typeof ResizeObserver === 'function' && host !== null) {
+    if (boundsObserver === null) {
+      boundsObserver = new ResizeObserver(syncVisiblePane)
+    }
+    syncBoundsObserver()
+    if (domObserver === null && typeof MutationObserver === 'function'
+      && typeof document !== 'undefined' && document.body !== null) {
+      domObserver = new MutationObserver(() => {
+        if (domSyncScheduled || root === null || root.hidden !== false) return
+        if (root.isConnected && observedHost !== null && observedHost.isConnected
+          && observedSeat !== null && observedSeat.isConnected) {
+          return
+        }
+        domSyncScheduled = true
+        queueMicrotask(() => {
+          domSyncScheduled = false
+          if (root === null || root.hidden !== false) return
+          const latestHost = centerHost()
+          const latestSeat = document.querySelector('[data-shell-leading]')
+          if (root.isConnected && latestHost === observedHost && latestSeat === observedSeat) return
+          syncVisiblePane()
+        })
+      })
+      domObserver.observe(document.body, { childList: true, subtree: true })
+    }
+    return
+  }
+  if (keepAlive === undefined) {
+    keepAlive = setInterval(syncVisiblePane, 500)
+  }
+}
+
+function stopBoundsTracking(): void {
+  if (boundsObserver !== null) {
+    boundsObserver.disconnect()
+    boundsObserver = null
+  }
+  if (domObserver !== null) {
+    domObserver.disconnect()
+    domObserver = null
+  }
+  observedHost = null
+  observedSeat = null
+  domSyncScheduled = false
+  if (resizeBound && typeof window !== 'undefined') {
+    window.removeEventListener('resize', syncVisiblePane)
+    resizeBound = false
+  }
+  if (keepAlive !== undefined) {
+    clearInterval(keepAlive)
+    keepAlive = undefined
+  }
 }
 
 function mount(): boolean {
@@ -206,7 +319,7 @@ function mount(): boolean {
     externalButton = h('button', { class: 'dm-remote-pane-btn', type: 'button' }, paneStrings.openExternal)
     externalButton.addEventListener('click', () => {
       if (iframe === null) return
-      try { window.open(reloadUrl(iframe.src), '_blank', 'noopener,noreferrer') } catch { /* ignore */ }
+      try { window.open(externalPortalUrl(iframe.src), '_blank', 'noopener,noreferrer') } catch { /* ignore */ }
     })
     closeButton = h('button', { class: 'dm-remote-pane-btn', type: 'button' }, paneStrings.close)
     closeButton.addEventListener('click', () => { hideRemotePane() })
@@ -226,8 +339,9 @@ function mount(): boolean {
       barNode,
       iframe,
       loadingNode)
-    window.addEventListener('message', (event) => {
+    messageHandler = (event: MessageEvent): void => {
       if (event.source !== iframe?.contentWindow) return
+      if (currentPortalOrigin !== null && event.origin !== currentPortalOrigin) return
       const data = event.data as {
         source?: unknown
         kind?: unknown
@@ -247,9 +361,10 @@ function mount(): boolean {
       const url = iframe?.src
       hideRemotePane()
       if (url !== undefined && url.length > 0) {
-        try { window.open(url, '_blank', 'noopener,noreferrer') } catch { /* ignore */ }
+        try { window.open(externalPortalUrl(url), '_blank', 'noopener,noreferrer') } catch { /* ignore */ }
       }
-    })
+    }
+    window.addEventListener('message', messageHandler)
   }
   if (host === null) return false
   if (!root.isConnected) document.body.appendChild(root)
@@ -274,7 +389,11 @@ export function showRemotePane(
   if (reloadButton !== null) reloadButton.textContent = paneStrings.reload
   if (externalButton !== null) externalButton.textContent = paneStrings.openExternal
   if (closeButton !== null) closeButton.textContent = paneStrings.close
-  const sameDevice = currentDeviceId === deviceId && loaded
+  const nextOrigin = originOf(url)
+  const sameDevice = currentDeviceId === deviceId
+    && loaded
+    && currentPortalOrigin !== null
+    && currentPortalOrigin === nextOrigin
   if (currentDeviceId !== deviceId) activeSession = null
   currentDeviceId = deviceId
   titleNode.textContent = deviceName
@@ -294,11 +413,12 @@ export function showRemotePane(
             source: 'dsh-device-mesh-parent',
             kind: 'open-session',
             sessionId,
-          }, '*')
+          }, currentPortalOrigin ?? '*')
         } catch { /* ignore */ }
       }
     }
   } else {
+    currentPortalOrigin = nextOrigin
     loaded = false
     pendingSession = newSession === undefined && sessionId !== undefined && sessionId.length > 0
       ? sessionId
@@ -318,14 +438,7 @@ export function showRemotePane(
   }
   root.hidden = false
   updateBounds()
-  if (keepAlive === undefined) {
-    keepAlive = setInterval(() => {
-      if (root !== null && root.hidden === false) {
-        if (!root.isConnected) mount()
-        else updateBounds()
-      }
-    }, 500)
-  }
+  startBoundsTracking()
   return true
 }
 
@@ -336,10 +449,37 @@ export function hideRemotePane(): void {
   for (const timer of sessionTimers) clearTimeout(timer)
   sessionTimers = []
   if (root !== null) root.hidden = true
-  if (keepAlive !== undefined) {
-    clearInterval(keepAlive)
-    keepAlive = undefined
+  stopBoundsTracking()
+}
+
+/** Tear down all DOM nodes, observers and listeners owned by the remote pane. */
+export function disposeRemotePane(): void {
+  hideRemotePane()
+  if (loadingTimer !== undefined) {
+    clearTimeout(loadingTimer)
+    loadingTimer = undefined
   }
+  if (messageHandler !== null && typeof window !== 'undefined') {
+    window.removeEventListener('message', messageHandler)
+    messageHandler = null
+  }
+  root?.remove()
+  if (typeof document !== 'undefined') {
+    document.getElementById(STYLE_ID)?.remove()
+  }
+  root = null
+  iframe = null
+  barNode = null
+  titleNode = null
+  reloadButton = null
+  externalButton = null
+  closeButton = null
+  loadingNode = null
+  currentDeviceId = null
+  currentPortalOrigin = null
+  loaded = false
+  activeSession = null
+  pendingSession = null
 }
 
 /** The device currently shown in the pane, if any. */

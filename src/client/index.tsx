@@ -18,7 +18,7 @@ import { mountSidebarHost } from './sidebar-host.js'
 import type { UiChild } from './ui.js'
 import { DeviceMeshGlyph, el, navigatePortalWindow, openBlankPortalWindow, openExternalBrowser, openPortalWindow } from './ui.js'
 import type { RemotePaneStrings } from './remote-pane.js'
-import { showRemotePane } from './remote-pane.js'
+import { canShowRemotePane, disposeRemotePane, showRemotePane } from './remote-pane.js'
 import { ensureSessionSurface } from './session-surface.js'
 import { listenForSessionNavigation, openDeepLinkedSession, reportRemoteSession } from './deep-link.js'
 
@@ -87,9 +87,10 @@ function sidebarRightService(ctx: ClientContext): SidebarRightService | null {
 /** Plugin entry: register every slot inside `ctx.slots.inject`. */
 export function apply(ctx: ClientContext): void {
   installStyles(ctx)
-  openDeepLinkedSession(ctx)
-  listenForSessionNavigation(ctx)
-  reportRemoteSession(ctx)
+  ctx.effect(() => openDeepLinkedSession(ctx), 'device-mesh: deep-link boot')
+  ctx.effect(() => listenForSessionNavigation(ctx), 'device-mesh: session navigation')
+  ctx.effect(() => reportRemoteSession(ctx), 'device-mesh: remote session reporter')
+  ctx.effect(() => () => { disposeRemotePane() }, 'device-mesh: remote pane')
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'device-mesh: dictionaries')
   const t = ctx.locale.bind(NS)
   const remotePaneStrings = (): RemotePaneStrings => ({
@@ -121,9 +122,9 @@ export function apply(ctx: ClientContext): void {
     newSession?: RemoteNewSessionRequest,
   ): void => {
     const target = getMeshSnapshot().state?.devices.find(device => device.deviceId === deviceId)
-    // Pre-open synchronously: the portal URL is only known after an RPC, and a
-    // post-await window.open loses user activation and stays blank.
-    const pending = openBlankPortalWindow()
+    // Only pre-open a fallback popup synchronously when the in-shell center
+    // pane is unavailable; otherwise every click flashes and closes a blank tab.
+    const pending = canShowRemotePane() ? null : openBlankPortalWindow()
     void meshApi.openPortal(deviceId)
       .then(async (url) => {
         let targetUrl = url
@@ -209,8 +210,7 @@ export function apply(ctx: ClientContext): void {
     if (!ensureSessionSurface(ctx)) return false
     for (let attempt = 0; attempt < 15; attempt += 1) {
       await new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 100)
-        timer.unref?.()
+        setTimeout(resolve, 100)
       })
       if (openRemoteTab(url)) return true
     }
