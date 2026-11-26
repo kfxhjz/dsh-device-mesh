@@ -167,8 +167,9 @@ async function readJsonResult(path: string): Promise<JsonReadResult> {
   let text: string
   try {
     text = await readFile(path, 'utf8')
-  } catch {
-    return { status: 'missing' }
+  } catch (error) {
+    if (errorCode(error) === 'ENOENT') return { status: 'missing' }
+    throw error
   }
   try {
     return { status: 'ok', value: JSON.parse(text) as unknown }
@@ -223,6 +224,31 @@ function createMutex(): <T>(callback: () => Promise<T>) => Promise<T> {
   }
 }
 
+/** True when `pid` refers to a live local process (or we lack permission to signal it). */
+function isLocalPidAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false
+  if (pid === process.pid) return true
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return errorCode(error) === 'EPERM'
+  }
+}
+
+/** Read the owning PID from a lock file if present. */
+async function readLockPid(lockPath: string): Promise<number | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(lockPath, 'utf8'))
+    if (isRecord(parsed) && typeof parsed.pid === 'number' && Number.isSafeInteger(parsed.pid)) {
+      return parsed.pid
+    }
+  } catch {
+    // Missing, truncated, or mid-write lock file.
+  }
+  return undefined
+}
+
 /**
  * Acquire the cross-process state lock.
  * @param lockPath - lock file path.
@@ -236,6 +262,7 @@ async function acquireStateLock(
   staleMs: number,
 ): Promise<() => Promise<void>> {
   const deadline = Date.now() + timeoutMs
+  const hardStaleMs = Math.max(staleMs * 4, 60_000)
   for (;;) {
     let handle: FileHandle | undefined
     try {
@@ -250,9 +277,25 @@ async function acquireStateLock(
       if (errorCode(error) !== 'EEXIST') throw error
       try {
         const info = await stat(lockPath)
-        if (Date.now() - info.mtimeMs > staleMs) {
-          await unlink(lockPath).catch(() => {})
-          continue
+        const ageMs = Date.now() - info.mtimeMs
+        if (ageMs > staleMs) {
+          const ownerPid = await readLockPid(lockPath)
+          // Re-verify the lock inode and mtime after reading the PID so a
+          // freshly created zero-byte lock from a competing winner is never
+          // misidentified as an abandoned lock.
+          const latest = await stat(lockPath)
+          if (latest.ino !== info.ino || latest.mtimeMs !== info.mtimeMs) continue
+          const ownerDead = ownerPid === undefined || !isLocalPidAlive(ownerPid)
+          if (ownerDead || ageMs > hardStaleMs) {
+            // Atomically rename before unlinking so two waiters racing to break
+            // the same stale lock cannot delete a winner's newly created lock.
+            const staleCopy = `${lockPath}.stale-${process.pid.toString(36)}-${randomBytes(4).toString('hex')}`
+            await rename(lockPath, staleCopy).then(
+              () => unlink(staleCopy).catch(() => {}),
+              () => undefined,
+            )
+            continue
+          }
         }
       } catch {
         continue
@@ -546,15 +589,27 @@ export class MeshStore {
     const home = this.homeValue
     await mkdir(home, { recursive: true, mode: 0o700 })
     await chmod(home, 0o700).catch(() => {})
-    await this.loadIdentity()
-    await this.loadPeers()
-    await this.loadSettings()
-    await this.reconcileDeviceName()
-    await this.requireAuditFile()
-    this.initialized = true
+    const pendingAudits: AuditInput[] = []
+    await this.mutex(async () => {
+      if (this.initialized) return
+      const release = await acquireStateLock(this.paths.lock, this.lockTimeoutMs, this.staleLockMs)
+      try {
+        await this.loadIdentityLocked(pendingAudits)
+        await this.loadPeersLocked()
+        await this.loadSettingsLocked()
+        await this.reconcileDeviceNameLocked()
+        await this.requireAuditFile()
+        this.initialized = true
+      } finally {
+        await release()
+      }
+    })
+    for (const entry of pendingAudits) {
+      await this.appendAudit(entry)
+    }
   }
 
-  private async loadIdentity(): Promise<void> {
+  private async loadIdentityLocked(pendingAudits: AuditInput[]): Promise<void> {
     const path = join(this.homeValue, IDENTITY_FILE)
     const read = await readJsonResult(path)
     const raw = read.status === 'ok' ? read.value : undefined
@@ -569,7 +624,7 @@ export class MeshStore {
       // Never rotate device keys silently: keep the old bytes aside and make the
       // replacement visible in both the log and the audit trail.
       await backupCorruptFile(path, this.logger)
-      await this.appendAudit({ action: 'identity.regenerated', detail: 'invalid identity file' })
+      pendingAudits.push({ action: 'identity.regenerated', detail: 'invalid identity file' })
       this.logger.warn('device-mesh: identity file was invalid; generated a new identity (old file backed up)')
     }
     const created = await this.identityFactory()
@@ -577,11 +632,11 @@ export class MeshStore {
     if (validated === undefined) throw new Error('device-mesh: identity factory produced an invalid identity')
     await atomicWriteFile(path, JSON.stringify(validated, null, 2), 0o600)
     this.identityValue = validated
-    await this.appendAudit({ action: 'identity.created', peer: validated.deviceId })
+    pendingAudits.push({ action: 'identity.created', peer: validated.deviceId })
     this.logger.info(`device-mesh: created device identity ${validated.deviceId}`)
   }
 
-  private async loadPeers(): Promise<void> {
+  private async loadPeersLocked(): Promise<void> {
     const path = join(this.homeValue, PEERS_FILE)
     const read = await readJsonResult(path)
     const raw = read.status === 'ok' ? read.value : undefined
@@ -598,7 +653,7 @@ export class MeshStore {
     await atomicWriteFile(path, JSON.stringify(this.peersValue, null, 2), 0o600)
   }
 
-  private async loadSettings(): Promise<void> {
+  private async loadSettingsLocked(): Promise<void> {
     const path = join(this.homeValue, SETTINGS_FILE)
     const read = await readJsonResult(path)
     const raw = read.status === 'ok' ? read.value : undefined
@@ -616,11 +671,13 @@ export class MeshStore {
     await atomicWriteFile(path, JSON.stringify(this.settingsValue, null, 2), 0o600)
   }
 
-  private async reconcileDeviceName(): Promise<void> {
+  private async reconcileDeviceNameLocked(): Promise<void> {
     const identity = this.identityValue
     if (identity === undefined) return
     if (this.settingsValue.deviceName === undefined) {
-      await this.updateSettings({ deviceName: identity.name })
+      const next = mergeSettings(this.settingsValue, { deviceName: identity.name })
+      await atomicWriteFile(join(this.homeValue, SETTINGS_FILE), JSON.stringify(next, null, 2), 0o600)
+      this.settingsValue = next
       return
     }
     if (this.settingsValue.deviceName !== identity.name) {
@@ -976,7 +1033,7 @@ export class MeshStore {
    */
   async updatePrivateJson<T>(
     name: string,
-    mutate: (current: unknown) => { readonly result: T; readonly next: unknown },
+    mutate: (current: unknown) => { readonly result: T; readonly next?: unknown },
   ): Promise<T> {
     if (!/^[a-z0-9][a-z0-9._-]*\.json$/u.test(name)) {
       throw new Error(`device-mesh: invalid state file name ${JSON.stringify(name)}`)
@@ -987,7 +1044,9 @@ export class MeshStore {
         const path = join(this.homeValue, name)
         const current = await readJsonFile(path)
         const { result, next } = mutate(current)
-        await atomicWriteFile(path, JSON.stringify(next, null, 2), 0o600)
+        if (next !== undefined) {
+          await atomicWriteFile(path, JSON.stringify(next, null, 2), 0o600)
+        }
         return result
       } finally {
         await release()

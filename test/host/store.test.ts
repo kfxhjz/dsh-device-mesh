@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFile, readdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
 
@@ -270,5 +270,38 @@ describe('store: helpers', () => {
     assert.equal(identity.name, 'My box')
     assert.equal(identity.platform, 'darwin')
     assert.equal(deriveDeviceId(identity.signPk), identity.deviceId)
+  })
+
+  it('serializes concurrent MeshStore.open() calls on an empty directory to one identity', async () => {
+    const temp = await makeTempDir()
+    try {
+      const [first, second] = await Promise.all([
+        MeshStore.open({ home: temp.dir }),
+        MeshStore.open({ home: temp.dir }),
+      ])
+      assert.equal(first.getIdentity().deviceId, second.getIdentity().deviceId)
+      assert.equal(first.getIdentity().signPk, second.getIdentity().signPk)
+    } finally {
+      await temp.cleanup()
+    }
+  })
+
+  it('fails closed on non-ENOENT read errors instead of silently wiping peers', async () => {
+    const temp = await makeTempDir()
+    try {
+      const store = await MeshStore.open({ home: temp.dir })
+      await store.upsertPeer('controllers', peerRecord('dm_peer000000000000000003'))
+      await rm(join(temp.dir, 'peers.json'))
+      await mkdir(join(temp.dir, 'peers.json'))
+      await assert.rejects(
+        () => store.upsertPeer('controllers', peerRecord('dm_peer000000000000000004')),
+        (error: unknown) => {
+          const code = (error as { code?: string }).code
+          return code === 'EISDIR' || code === 'EPERM' || code === 'EACCES'
+        },
+      )
+    } finally {
+      await temp.cleanup()
+    }
   })
 })
