@@ -30,6 +30,7 @@ import {
   randomBytes,
   encodeBase64Url,
   decodeBase64Url,
+  signClientAuth,
 } from '../../src/host/crypto.ts'
 import { NoiseNkHandshake } from '../../src/host/noise.ts'
 import type { CipherState } from '../../src/host/noise.ts'
@@ -784,4 +785,111 @@ test('handshake frame size and message caps are enforced', async () => {
   transportPair.b.deliver(oversized)
   await expectChannelError(acceptance, 'mesh/bad-request')
   assert.equal(transportPair.b.closeInfo?.code, 4400)
+})
+
+test('pipelined sealed frames arriving during auth are drained into the session without desync', async () => {
+  const transportPair = createMemoryTransportPair()
+  let releaseAuth!: () => void
+  const authGate = new Promise<void>((resolve) => {
+    releaseAuth = resolve
+  })
+  const acceptance = acceptMeshChannel({
+    transport: transportPair.b,
+    identity: daemonIdentity,
+    authenticate: async () => {
+      await authGate
+      return { kind: 'paired', peer: peerRecordOf(controllerIdentity) }
+    },
+    handlers: makeHandlers(),
+    appVersion: 'test',
+    authTimeoutMs: 2_000,
+  })
+  const rogue = await startRogue(transportPair.a, daemonDescriptor, controllerIdentity)
+  const nonce = randomBytes(32)
+  rogue.sendSealed(
+    controlFrame(
+      clientAuthMessage(controllerIdentity, {
+        nonce,
+        auth: { kind: 'paired', sig: signClientAuth(controllerIdentity.signSk, rogue.handshakeHash) },
+      }),
+    ),
+  )
+  // Pipeline a sealed ping frame immediately after ClientAuth while the
+  // daemon is still inside `authenticate()` (still in `app-auth` phase).
+  rogue.sendSealed(controlFrame({ ping: 42 }))
+  await flushAsync(4)
+  releaseAuth()
+
+  const serverAuth = await rogue.readSealed()
+  assert.equal(serverAuth[0], 0x10)
+  const pongFrame = await rogue.readSealed()
+  assert.equal(pongFrame[0], 0x10)
+  const pong = JSON.parse(new TextDecoder().decode(pongFrame.subarray(1))) as { pong?: number }
+  assert.equal(pong.pong, 42)
+
+  // Follow-up frame proves Noise rx/tx nonces remained synchronized.
+  rogue.sendSealed(controlFrame({ ping: 43 }))
+  const pongFrame2 = await rogue.readSealed()
+  const pong2 = JSON.parse(new TextDecoder().decode(pongFrame2.subarray(1))) as { pong?: number }
+  assert.equal(pong2.pong, 43)
+
+  const daemon = await acceptance
+  daemon.close()
+  transportPair.a.close()
+})
+
+test('ControllerChannelOptions.signal aborts an in-flight handshake', async () => {
+  const transportPair = createMemoryTransportPair()
+  const abort = new AbortController()
+  const pending = connectMeshChannel({
+    transport: transportPair.a,
+    identity: controllerIdentity,
+    daemon: daemonDescriptor,
+    appVersion: 'test',
+    authTimeoutMs: 5_000,
+    firstFrameTimeoutMs: 5_000,
+    signal: abort.signal,
+  })
+  await flushAsync(2)
+  abort.abort()
+  await expectChannelError(pending, 'mesh/internal')
+})
+
+test('corrupt pipelined sealed frame during auth rejects acceptMeshChannel instead of returning a dead session', async () => {
+  const transportPair = createMemoryTransportPair()
+  let releaseAuth!: () => void
+  const authGate = new Promise<void>((resolve) => {
+    releaseAuth = resolve
+  })
+  const acceptance = acceptMeshChannel({
+    transport: transportPair.b,
+    identity: daemonIdentity,
+    authenticate: async () => {
+      await authGate
+      return { kind: 'paired', peer: peerRecordOf(controllerIdentity) }
+    },
+    handlers: makeHandlers(),
+    appVersion: 'test',
+    authTimeoutMs: 2_000,
+  })
+  const rogue = await startRogue(transportPair.a, daemonDescriptor, controllerIdentity)
+  rogue.sendSealed(
+    controlFrame(
+      clientAuthMessage(controllerIdentity, {
+        nonce: randomBytes(32),
+        auth: { kind: 'paired', sig: signClientAuth(controllerIdentity.signSk, rogue.handshakeHash) },
+      }),
+    ),
+  )
+  // Send a corrupted sealed frame while `authenticate()` is still pending.
+  const bogus = new Uint8Array(32)
+  bogus[0] = 0x02
+  bogus.fill(0xaa, 1)
+  transportPair.a.send(bogus)
+  await flushAsync(4)
+  releaseAuth()
+
+  await expectChannelError(acceptance, 'mesh/crypto')
+  assert.equal(transportPair.b.closeInfo?.code, 4401)
+  transportPair.a.close()
 })

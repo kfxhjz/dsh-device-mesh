@@ -252,7 +252,11 @@ export class DeviceMeshBroker {
   private readonly daemons = new Map<string, DaemonRuntime>()
   /** Inbound controller sessions, tracked so revocation and expiry can close them. */
   private readonly inbound = new Map<string, Set<MeshSession>>()
+  /** Inbound transports currently in Noise/app-auth before becoming a session. */
+  private inFlightInbound = 0
   private readonly portals = new Map<string, PortalRecord>()
+  /** Single-flight map for in-progress portal opens, keyed by deviceId. */
+  private readonly openingPortals = new Map<string, Promise<{ readonly url: string }>>()
   /**
    * Tail of a promise chain that serializes pairing decisions which read and
    * then modify both the pairing queue and the persisted peer records
@@ -433,14 +437,30 @@ export class DeviceMeshBroker {
           this.onInboundTransport(transport, 'relay')
         },
       )
+      if (!this.started) {
+        await relay.close().catch(() => {})
+        return
+      }
       this.relayDaemon = relay
       this.relayConnected = relay.connected
+      let announcedReady = false
+      relay.onConnect?.(() => {
+        if (this.relayDaemon !== relay) return
+        this.relayConnected = true
+        if (announcedReady) {
+          void this.store.appendAudit({ action: 'relay.connected' })
+        }
+        this.changed()
+      })
       relay.onDisconnect(() => {
+        if (this.relayDaemon !== relay) return
         this.relayConnected = false
         void this.store.appendAudit({ action: 'relay.disconnected' })
         this.changed()
       })
       void relay.ready.then(() => {
+        if (this.relayDaemon !== relay) return
+        announcedReady = true
         this.relayConnected = relay.connected
         void this.store.appendAudit({ action: 'relay.connected' })
         this.changed()
@@ -619,13 +639,30 @@ export class DeviceMeshBroker {
    * accepted sockets is closed cheaply with 1013 "mesh busy".
    */
   canAcceptInbound(): boolean {
-    let total = 0
+    let total = this.inFlightInbound
     for (const sessions of this.inbound.values()) {
       for (const session of sessions) {
         if (session.open) total += 1
       }
     }
     return total < MAX_INBOUND_SESSIONS
+  }
+
+  /**
+   * Reserve one inbound slot before starting Noise/app-auth so a burst of
+   * pre-auth sockets cannot bypass {@link MAX_INBOUND_SESSIONS}. Release the
+   * reservation right before handing the authenticated session to
+   * {@link noteInboundOpened} or when the handshake fails.
+   */
+  tryReserveInbound(): (() => void) | undefined {
+    if (!this.canAcceptInbound()) return undefined
+    this.inFlightInbound += 1
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.inFlightInbound = Math.max(0, this.inFlightInbound - 1)
+    }
   }
 
   /** Record that an inbound controller session became usable. */
@@ -1816,7 +1853,7 @@ export class DeviceMeshBroker {
       relay: {
         configured: settings.relay.enabled && settings.relay.endpoint !== null,
         endpoint: settings.relay.endpoint,
-        connected: this.relayConnected,
+        connected: this.relayDaemon !== undefined ? this.relayDaemon.connected : this.relayConnected,
         useTls: settings.relay.useTls,
       },
       devices: [...deviceMap.values()],
@@ -1854,7 +1891,7 @@ export class DeviceMeshBroker {
         configured: settings.relay.enabled,
         endpoint: settings.relay.endpoint,
         serverIdPresent: this.store.getRelayServerId() !== undefined,
-        connected: this.relayConnected,
+        connected: this.relayDaemon !== undefined ? this.relayDaemon.connected : this.relayConnected,
       },
       pairing: {
         pendingTickets: this.pairing.pendingTicketCount,

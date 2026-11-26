@@ -66,6 +66,8 @@ export interface RelayDaemon {
   readonly ready: Promise<void>
   /** Fires once per attached controller data socket. */
   onClient(listener: (transport: MeshTransport, connectionId: string) => void): () => void
+  /** Fires whenever the control socket finishes syncing (including after reconnect). */
+  onConnect?(listener: () => void): () => void
   /** Fires when the control socket goes away. */
   onDisconnect(listener: (info: TransportCloseInfo) => void): () => void
   readonly connected: boolean

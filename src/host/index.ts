@@ -208,8 +208,9 @@ async function acceptInboundTransport(options: {
   readonly logger: MeshLogger
   readonly appVersion: string
   readonly nonceCache: NonceReplayCache
+  readonly releaseSlot: () => void
 }): Promise<void> {
-  const { transport, store, broker, logger } = options
+  const { transport, store, broker, logger, releaseSlot } = options
   const identity = store.getIdentity()
   logger.debug(`device-mesh: inbound ${transport.kind} transport from ${transport.remoteLabel}; starting channel`)
   const authenticatedController: { deviceId: string | undefined } = { deviceId: undefined }
@@ -253,6 +254,7 @@ async function acceptInboundTransport(options: {
       },
     })
   } catch (error) {
+    releaseSlot()
     const code = isRecord(error) && typeof error.code === 'string' ? `${error.code}: ` : ''
     logger.warn(`device-mesh: inbound ${transport.kind} session rejected: ${code}${error instanceof Error ? error.message : String(error)}`)
     return
@@ -263,6 +265,8 @@ async function acceptInboundTransport(options: {
     // First contact: a pending prompt must not survive its controller session.
     broker.trackPendingPairing(pendingRequestId, session)
   }
+  // Synchronous handoff from in-flight reservation to tracked inbound session.
+  releaseSlot()
   broker.noteInboundOpened(deviceId, session)
   void session.closed.then(() => {
     broker.noteInboundClosed(deviceId, session)
@@ -394,9 +398,10 @@ export async function createHostRuntime(
     offline: config.offline,
     directHost: config.direct.host,
     onInboundTransport: (transport: MeshTransport) => {
-      // Check before the Noise handshake so a burst of accepted sockets is
-      // closed cheaply; the broker also enforces per-controller limits.
-      if (!broker.canAcceptInbound()) {
+      // Reserve before the Noise handshake so a burst of accepted sockets is
+      // bounded and closed cheaply before consuming CPU/FDs.
+      const releaseSlot = broker.tryReserveInbound()
+      if (releaseSlot === undefined) {
         logger.warn('device-mesh: inbound session limit reached; rejecting transport')
         transport.close(1013, 'mesh busy')
         return
@@ -408,7 +413,9 @@ export async function createHostRuntime(
         logger,
         appVersion: config.appVersion,
         nonceCache,
+        releaseSlot,
       }).catch((error: unknown) => {
+        releaseSlot()
         logger.warn(`device-mesh: inbound session failed: ${error instanceof Error ? error.message : String(error)}`)
       })
     },

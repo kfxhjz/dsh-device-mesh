@@ -434,3 +434,30 @@ test('relay: buildRelayUrl rejects non-ws protocols', () => {
     /ws:\/\//,
   )
 })
+
+test('relay: onConnect fires again after a control socket reconnect', async () => {
+  const mock = await startMockRelay()
+  let connects = 0
+  let disconnects = 0
+  const daemon = startRelayDaemon({
+    url: mock.url,
+    serverId: `${SERVER_ID}-reconnect`,
+    version: 2,
+    minBackoffMs: 20,
+    maxBackoffMs: 50,
+    heartbeatMs: 0,
+  })
+  daemon.onConnect?.(() => { connects += 1 })
+  daemon.onDisconnect(() => { disconnects += 1 })
+  try {
+    await daemon.ready
+    await waitForCondition(() => connects >= 1, 3_000, 'initial onConnect')
+    const initial = connects
+    mock.dropControl(`${SERVER_ID}-reconnect`, 1011, 'restart')
+    await waitForCondition(() => disconnects >= 1, 3_000, 'disconnect event')
+    await waitForCondition(() => connects > initial && daemon.connected, 3_000, 'reconnect onConnect')
+  } finally {
+    await daemon.close()
+    await mock.close()
+  }
+})

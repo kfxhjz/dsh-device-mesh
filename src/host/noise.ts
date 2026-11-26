@@ -207,9 +207,12 @@ export function noiseHkdf(chainingKey: Uint8Array, inputKeyMaterial: Uint8Array,
   const result: Uint8Array[] = []
   let previous: Buffer = Buffer.alloc(0)
   for (let index = 1; index <= outputs; index += 1) {
-    previous = hmacSha256(tempKey, previous, Buffer.from([index]))
+    const next = hmacSha256(tempKey, previous, Buffer.from([index]))
+    previous.fill(0)
+    previous = next
     result.push(new Uint8Array(previous))
   }
+  previous.fill(0)
   tempKey.fill(0)
   return result
 }
@@ -390,9 +393,15 @@ export class SymmetricState {
   mixKey(inputKeyMaterial: Uint8Array): void {
     this.assertNotSplit()
     const [nextChainingKey, cipherKey] = noiseHkdf(this.ck, inputKeyMaterial, 2) as [Uint8Array, Uint8Array]
-    zeroize(this.ck)
-    this.ck = Buffer.from(nextChainingKey)
-    this.cipher = new CipherState(cipherKey)
+    try {
+      zeroize(this.ck)
+      this.ck = Buffer.from(nextChainingKey)
+      this.cipher.destroy()
+      this.cipher = new CipherState(cipherKey)
+    } finally {
+      zeroize(nextChainingKey)
+      zeroize(cipherKey)
+    }
   }
 
   /** MixKeyAndHash(ikm): ck, h, k = HKDF(ck, ikm, 3) (PSK handling). */
@@ -403,10 +412,17 @@ export class SymmetricState {
       Uint8Array,
       Uint8Array,
     ]
-    zeroize(this.ck)
-    this.ck = Buffer.from(nextChainingKey)
-    this.mixHash(tempHash)
-    this.cipher = new CipherState(cipherKey)
+    try {
+      zeroize(this.ck)
+      this.ck = Buffer.from(nextChainingKey)
+      this.mixHash(tempHash)
+      this.cipher.destroy()
+      this.cipher = new CipherState(cipherKey)
+    } finally {
+      zeroize(nextChainingKey)
+      zeroize(tempHash)
+      zeroize(cipherKey)
+    }
   }
 
   /** MixKey(e.public_key) for PSK handshakes; a no-op otherwise. */
@@ -438,12 +454,18 @@ export class SymmetricState {
     this.assertNotSplit()
     this.splitDone = true
     const [firstKey, secondKey] = noiseHkdf(this.ck, Buffer.alloc(0), 2) as [Uint8Array, Uint8Array]
-    const c1 = new CipherState(firstKey)
-    const c2 = new CipherState(secondKey)
-    // The chaining key is no longer needed once the transport keys exist.
-    zeroize(this.ck)
-    this.ck = Buffer.alloc(NOISE_HASH_LEN)
-    return { c1, c2 }
+    try {
+      const c1 = new CipherState(firstKey)
+      const c2 = new CipherState(secondKey)
+      // The chaining key and handshake cipher are no longer needed once the transport keys exist.
+      zeroize(this.ck)
+      this.ck = Buffer.alloc(NOISE_HASH_LEN)
+      this.cipher.destroy()
+      return { c1, c2 }
+    } finally {
+      zeroize(firstKey)
+      zeroize(secondKey)
+    }
   }
 
   /** GetHandshakeHash(): the final `h`, used for channel binding / SAS. */
@@ -678,6 +700,7 @@ export class NoiseNkHandshake {
     this.destroyed = true
     zeroize(this.localStaticPrivateKey)
     zeroize(this.localEphemeralPrivateKey)
+    zeroize(this.fixedEphemeralPrivateKey)
     zeroize(this.psk)
     if (!this.splitResult) this.symmetric.destroy()
     this.localStaticPrivateKey = null

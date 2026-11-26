@@ -38,6 +38,8 @@ const CONTROL_MAX_PAYLOAD = 128 * 1024
 const DEFAULT_MIN_BACKOFF_MS = 1_000
 const DEFAULT_MAX_BACKOFF_MS = 30_000
 const DEFAULT_DATA_RETRY_LIMIT = 3
+/** Cap on concurrent relay data sockets so a misbehaving relay cannot exhaust FDs. */
+const DEFAULT_MAX_DATA_SOCKETS = 64
 
 export interface RelayDaemonExtraOptions extends RelayDaemonOptions {
   /** WS ping interval in milliseconds; `0` disables it. Default 10_000. */
@@ -46,6 +48,8 @@ export interface RelayDaemonExtraOptions extends RelayDaemonOptions {
   readonly handshakeTimeoutMs?: number
   /** Reconnect jitter as a fraction of the delay; default 0.2. */
   readonly backoffJitter?: number
+  /** Maximum concurrent data sockets tracked by a v2 daemon. Default 64. */
+  readonly maxDataSockets?: number
   readonly logger?: TransportLogger
 }
 
@@ -215,6 +219,7 @@ abstract class RelayDaemonBase implements RelayDaemon {
   protected readonly backoffJitter: number
   protected readonly readyDeferred = deferred<void>()
   protected readonly clientListeners = new Set<RelayDaemonClientHandler>()
+  protected readonly connectListeners = new Set<() => void>()
   protected readonly disconnectListeners = new Set<(info: TransportCloseInfo) => void>()
   protected closed = false
   protected closePromise: Promise<void> | undefined
@@ -243,10 +248,30 @@ abstract class RelayDaemonBase implements RelayDaemon {
     }
   }
 
+  onConnect(listener: () => void): () => void {
+    this.connectListeners.add(listener)
+    return () => {
+      this.connectListeners.delete(listener)
+    }
+  }
+
   onDisconnect(listener: (info: TransportCloseInfo) => void): () => void {
     this.disconnectListeners.add(listener)
     return () => {
       this.disconnectListeners.delete(listener)
+    }
+  }
+
+  protected notifyConnect(): void {
+    for (const listener of [...this.connectListeners]) {
+      try {
+        listener()
+      } catch (error) {
+        logWarn(
+          this.logger,
+          `relay connect handler threw: ${error instanceof Error ? error.name : 'unknown'}`,
+        )
+      }
     }
   }
 
@@ -303,6 +328,7 @@ abstract class RelayDaemonBase implements RelayDaemon {
 // ---------------------------------------------------------------------------
 
 class RelayDaemonV2Impl extends RelayDaemonBase {
+  private readonly maxDataSockets: number
   private control: WebSocket | undefined
   private stopControlHeartbeat: (() => void) | undefined
   private synced = false
@@ -312,6 +338,11 @@ class RelayDaemonV2Impl extends RelayDaemonBase {
   private readonly dataRetryTimers = new Map<string, NodeJS.Timeout>()
   private readonly dataRetryAttempts = new Map<string, number>()
   private readonly knownIds = new Set<string>()
+
+  constructor(options: RelayDaemonExtraOptions) {
+    super(options)
+    this.maxDataSockets = Math.max(1, options.maxDataSockets ?? DEFAULT_MAX_DATA_SOCKETS)
+  }
 
   start(): void {
     if (this.closed || this.control || this.reconnectTimer) return
@@ -444,11 +475,16 @@ class RelayDaemonV2Impl extends RelayDaemonBase {
         this.synced = true
         this.resetBackoff()
         this.readyDeferred.resolve()
+        this.notifyConnect()
         this.reconcile(ids)
         break
       }
       case 'connected': {
         if (typeof record.connectionId !== 'string' || record.connectionId.length === 0) return
+        if (!this.knownIds.has(record.connectionId) && this.knownIds.size >= this.maxDataSockets) {
+          logWarn(this.logger, `relay data socket cap (${this.maxDataSockets}) reached; ignoring new connection`)
+          return
+        }
         this.knownIds.add(record.connectionId)
         this.attachData(record.connectionId)
         break
@@ -479,32 +515,47 @@ class RelayDaemonV2Impl extends RelayDaemonBase {
   }
 
   private reconcile(ids: ReadonlySet<string>): void {
+    const capped = new Set<string>()
+    for (const id of this.knownIds) {
+      if (ids.has(id) && capped.size < this.maxDataSockets) capped.add(id)
+    }
+    for (const id of ids) {
+      if (capped.size >= this.maxDataSockets) break
+      capped.add(id)
+    }
+    if (ids.size > capped.size) {
+      logWarn(this.logger, `relay sync truncated from ${ids.size} to ${capped.size} connection(s)`)
+    }
     this.knownIds.clear()
-    for (const id of ids) this.knownIds.add(id)
+    for (const id of capped) this.knownIds.add(id)
 
     for (const [id, transport] of [...this.dataTransports]) {
-      if (!ids.has(id)) {
+      if (!capped.has(id)) {
         this.dataTransports.delete(id)
         transport.close(1001, 'relay sync reconcile')
       }
     }
     for (const [id, ws] of [...this.pendingData]) {
-      if (!ids.has(id)) {
+      if (!capped.has(id)) {
         this.pendingData.delete(id)
         safeTerminate(ws)
       }
     }
     for (const id of [...this.dataRetryTimers.keys()]) {
-      if (!ids.has(id)) this.cancelDataRetry(id)
+      if (!capped.has(id)) this.cancelDataRetry(id)
     }
-    for (const id of ids) this.attachData(id)
-    logDebug(this.logger, `relay synced with ${ids.size} connection(s)`)
+    for (const id of capped) this.attachData(id)
+    logDebug(this.logger, `relay synced with ${capped.size} connection(s)`)
   }
 
   private attachData(connectionId: string): void {
     if (this.closed) return
     if (this.dataTransports.has(connectionId) || this.pendingData.has(connectionId)) return
     if (!this.controlOpen() || !this.knownIds.has(connectionId)) return
+    if (this.dataTransports.size + this.pendingData.size >= this.maxDataSockets) {
+      logWarn(this.logger, `relay data socket cap (${this.maxDataSockets}) reached; deferring attach`)
+      return
+    }
 
     let url: string
     try {
@@ -740,6 +791,7 @@ class RelayDaemonV1Impl extends RelayDaemonBase {
       })
       this.transport = transport
       this.readyDeferred.resolve()
+      this.notifyConnect()
       logDebug(this.logger, 'relay v1 socket attached')
       this.notifyClient(transport, RELAY_V1_CONNECTION_ID)
     })

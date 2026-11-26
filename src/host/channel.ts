@@ -120,6 +120,8 @@ export interface ControllerChannelOptions {
   >
   /** Optional MeshInfo to expose immediately (usually learned via `info` RPC). */
   readonly info?: MeshInfo
+  /** Optional cancellation signal for the handshake + authentication phase. */
+  readonly signal?: AbortSignal
 }
 
 /** Context handed to the daemon's injected authentication callback. */
@@ -260,6 +262,10 @@ class Mailbox {
     })
   }
 
+  drain(): Uint8Array[] {
+    return this.queue.splice(0)
+  }
+
   fail(error: Error): void {
     if (this.failure) return
     this.failure = error
@@ -348,12 +354,29 @@ async function runInitiator(
     firstFrameTimer = undefined
   }
 
+  const destroyCiphers = (): void => {
+    tx?.destroy()
+    rx?.destroy()
+    tx = undefined
+    rx = undefined
+  }
+
+  let onAbort: (() => void) | undefined
+  const detachAbort = (): void => {
+    if (onAbort !== undefined && options.signal !== undefined) {
+      options.signal.removeEventListener('abort', onAbort)
+      onAbort = undefined
+    }
+  }
+
   const fail = (error: MeshChannelError): void => {
     if (phase === 'closed' || failure) return
     failure = error
     phase = 'closed'
     if (deadline) clearTimeout(deadline)
     clearFirstFrameTimer()
+    detachAbort()
+    destroyCiphers()
     mailbox.fail(error)
     try {
       transport.close(error.closeCode, error.code)
@@ -386,30 +409,49 @@ async function runInitiator(
       phase = 'closed'
       if (deadline) clearTimeout(deadline)
       clearFirstFrameTimer()
+      detachAbort()
+      destroyCiphers()
       mailbox.fail(new MeshChannelError('mesh/internal', 'transport closed before authentication completed', MeshCloseCode.ProtocolError))
     } else if (info.code !== undefined && info.local !== true) {
       // remote close after a local failure: nothing else to do
     }
   })
 
+  if (options.signal !== undefined) {
+    const abortError = (): MeshChannelError => new MeshChannelError('mesh/internal', 'connection aborted', MeshCloseCode.Normal)
+    if (options.signal.aborted) {
+      const error = abortError()
+      fail(error)
+      throw error
+    }
+    onAbort = () => {
+      fail(abortError())
+    }
+    options.signal.addEventListener('abort', onAbort, { once: true })
+  }
+
   deadline = setTimeout(() => {
     fail(new MeshChannelError('mesh/unauthorized', 'authentication timed out', MeshCloseCode.Timeout))
   }, authTimeoutMs)
 
+  const deliverSealed = (frame: Uint8Array): void => {
+    if (phase !== 'session' || !session) return
+    try {
+      const plaintext = decryptSealedFrame(frame, rx)
+      if (!plaintext) {
+        fail(new MeshChannelError('mesh/crypto', 'message authentication failed', MeshCloseCode.CryptoError))
+        return
+      }
+      session.handlePlaintext(plaintext)
+    } catch (error) {
+      fail(error instanceof MeshChannelError ? error : new MeshChannelError('mesh/crypto', 'invalid sealed frame', MeshCloseCode.CryptoError))
+    }
+  }
+
   const onMessage = (frame: Uint8Array): void => {
     if (phase === 'closed') return
     if (phase === 'session') {
-      if (!session) return
-      try {
-        const plaintext = decryptSealedFrame(frame, rx)
-        if (!plaintext) {
-          fail(new MeshChannelError('mesh/crypto', 'message authentication failed', MeshCloseCode.CryptoError))
-          return
-        }
-        session.handlePlaintext(plaintext)
-      } catch (error) {
-        fail(error instanceof MeshChannelError ? error : new MeshChannelError('mesh/crypto', 'invalid sealed frame', MeshCloseCode.CryptoError))
-      }
+      deliverSealed(frame)
       return
     }
     mailbox.push(frame)
@@ -422,33 +464,41 @@ async function runInitiator(
     if (!pinnedDhKey) {
       throw new MeshChannelError('mesh/internal', 'pinned daemon key is invalid', MeshCloseCode.ProtocolError)
     }
+    let handshakeHash: Uint8Array
     const handshake = new NoiseNkHandshake({
       role: 'initiator',
       remoteStaticPublicKey: pinnedDhKey,
     })
-    const message1 = handshake.writeMessage()
-    if (message1.length > NOISE_MAX_HANDSHAKE_MESSAGE) {
-      throw new MeshChannelError('mesh/bad-request', 'handshake message too large', MeshCloseCode.ProtocolError)
-    }
-    sendFrame(toFrame(MessageKind.Handshake, message1))
-
-    // --- Noise msg2 (<- e, ee) -------------------------------------------
-    firstFrameTimer = setTimeout(() => {
-      fail(new MeshChannelError('mesh/unauthorized', 'handshake timed out', MeshCloseCode.Timeout))
-    }, options.firstFrameTimeoutMs ?? DEFAULT_FIRST_FRAME_TIMEOUT_MS)
-    firstFrameTimer.unref?.()
-    const frame2 = await mailbox.next().finally(clearFirstFrameTimer)
-    assertHandshakeFrame(frame2, NOISE_MAX_HANDSHAKE_MESSAGE)
     try {
-      handshake.readMessage(frame2.subarray(1))
-    } catch (error) {
-      throw noiseErrorToChannelError(error)
+      const message1 = handshake.writeMessage()
+      if (message1.length > NOISE_MAX_HANDSHAKE_MESSAGE) {
+        throw new MeshChannelError('mesh/bad-request', 'handshake message too large', MeshCloseCode.ProtocolError)
+      }
+      sendFrame(toFrame(MessageKind.Handshake, message1))
+
+      // --- Noise msg2 (<- e, ee) -----------------------------------------
+      firstFrameTimer = setTimeout(() => {
+        fail(new MeshChannelError('mesh/unauthorized', 'handshake timed out', MeshCloseCode.Timeout))
+      }, options.firstFrameTimeoutMs ?? DEFAULT_FIRST_FRAME_TIMEOUT_MS)
+      firstFrameTimer.unref?.()
+      const frame2 = await mailbox.next().finally(clearFirstFrameTimer)
+      assertHandshakeFrame(frame2, NOISE_MAX_HANDSHAKE_MESSAGE)
+      let payload2: Uint8Array
+      try {
+        payload2 = handshake.readMessage(frame2.subarray(1))
+      } catch (error) {
+        throw noiseErrorToChannelError(error)
+      }
+      if (payload2.length !== 0) {
+        throw new MeshChannelError('mesh/bad-request', 'handshake payload must be empty', MeshCloseCode.ProtocolError)
+      }
+      handshakeHash = handshake.handshakeHash
+      const transportPair = handshake.split()
+      tx = transportPair.tx
+      rx = transportPair.rx
+    } finally {
+      handshake.destroy()
     }
-    const handshakeHash = handshake.handshakeHash
-    const transportPair = handshake.split()
-    tx = transportPair.tx
-    rx = transportPair.rx
-    handshake.destroy()
     phase = 'app-auth'
 
     // --- ClientAuth ------------------------------------------------------
@@ -518,9 +568,17 @@ async function runInitiator(
       ...options.session,
     })
     phase = 'session'
+    detachAbort()
     if (deadline) {
       clearTimeout(deadline)
       deadline = undefined
+    }
+    for (const queued of mailbox.drain()) {
+      if (phase !== 'session') break
+      deliverSealed(queued)
+    }
+    if (phase !== 'session') {
+      throw failure ?? new MeshChannelError('mesh/crypto', 'channel closed while draining queued frames', MeshCloseCode.CryptoError)
     }
     return session
   } catch (error) {
@@ -565,12 +623,20 @@ async function runResponder(options: DaemonChannelOptions, identity: DeviceIdent
     firstFrameTimer = undefined
   }
 
+  const destroyCiphers = (): void => {
+    tx?.destroy()
+    rx?.destroy()
+    tx = undefined
+    rx = undefined
+  }
+
   const fail = (error: MeshChannelError): void => {
     if (phase === 'closed' || failure) return
     failure = error
     phase = 'closed'
     if (deadline) clearTimeout(deadline)
     clearFirstFrameTimer()
+    destroyCiphers()
     mailbox.fail(error)
     try {
       transport.close(error.closeCode, error.code)
@@ -603,6 +669,7 @@ async function runResponder(options: DaemonChannelOptions, identity: DeviceIdent
       phase = 'closed'
       if (deadline) clearTimeout(deadline)
       clearFirstFrameTimer()
+      destroyCiphers()
       mailbox.fail(new MeshChannelError('mesh/internal', 'transport closed before authentication completed', MeshCloseCode.ProtocolError))
     }
   })
@@ -611,20 +678,24 @@ async function runResponder(options: DaemonChannelOptions, identity: DeviceIdent
     fail(new MeshChannelError('mesh/unauthorized', 'authentication timed out', MeshCloseCode.Timeout))
   }, authTimeoutMs)
 
+  const deliverSealed = (frame: Uint8Array): void => {
+    if (phase !== 'session' || !session) return
+    try {
+      const plaintext = decryptSealedFrame(frame, rx)
+      if (!plaintext) {
+        fail(new MeshChannelError('mesh/crypto', 'message authentication failed', MeshCloseCode.CryptoError))
+        return
+      }
+      session.handlePlaintext(plaintext)
+    } catch (error) {
+      fail(error instanceof MeshChannelError ? error : new MeshChannelError('mesh/crypto', 'invalid sealed frame', MeshCloseCode.CryptoError))
+    }
+  }
+
   const onMessage = (frame: Uint8Array): void => {
     if (phase === 'closed') return
     if (phase === 'session') {
-      if (!session) return
-      try {
-        const plaintext = decryptSealedFrame(frame, rx)
-        if (!plaintext) {
-          fail(new MeshChannelError('mesh/crypto', 'message authentication failed', MeshCloseCode.CryptoError))
-          return
-        }
-        session.handlePlaintext(plaintext)
-      } catch (error) {
-        fail(error instanceof MeshChannelError ? error : new MeshChannelError('mesh/crypto', 'invalid sealed frame', MeshCloseCode.CryptoError))
-      }
+      deliverSealed(frame)
       return
     }
     mailbox.push(frame)
@@ -639,26 +710,36 @@ async function runResponder(options: DaemonChannelOptions, identity: DeviceIdent
     firstFrameTimer.unref?.()
     const frame1 = await mailbox.next().finally(clearFirstFrameTimer)
     assertHandshakeFrame(frame1, NOISE_MAX_HANDSHAKE_MESSAGE)
-    const handshake = new NoiseNkHandshake({
-      role: 'responder',
-      localStaticPrivateKey: x25519PrivateFromPkcs8(identity.dhSk),
-    })
-    let payload: Uint8Array
+    let handshakeHash: Uint8Array
+    const localStaticPrivateKey = x25519PrivateFromPkcs8(identity.dhSk)
+    let handshake: NoiseNkHandshake
     try {
-      payload = handshake.readMessage(frame1.subarray(1))
-    } catch (error) {
-      throw noiseErrorToChannelError(error)
+      handshake = new NoiseNkHandshake({
+        role: 'responder',
+        localStaticPrivateKey,
+      })
+    } finally {
+      localStaticPrivateKey.fill(0)
     }
-    if (payload.length !== 0) {
-      throw new MeshChannelError('mesh/bad-request', 'handshake payload must be empty', MeshCloseCode.ProtocolError)
+    try {
+      let payload: Uint8Array
+      try {
+        payload = handshake.readMessage(frame1.subarray(1))
+      } catch (error) {
+        throw noiseErrorToChannelError(error)
+      }
+      if (payload.length !== 0) {
+        throw new MeshChannelError('mesh/bad-request', 'handshake payload must be empty', MeshCloseCode.ProtocolError)
+      }
+      const message2 = handshake.writeMessage()
+      sendFrame(toFrame(MessageKind.Handshake, message2))
+      handshakeHash = handshake.handshakeHash
+      const transportPair = handshake.split()
+      tx = transportPair.tx
+      rx = transportPair.rx
+    } finally {
+      handshake.destroy()
     }
-    const message2 = handshake.writeMessage()
-    sendFrame(toFrame(MessageKind.Handshake, message2))
-    const handshakeHash = handshake.handshakeHash
-    const transportPair = handshake.split()
-    tx = transportPair.tx
-    rx = transportPair.rx
-    handshake.destroy()
     phase = 'app-auth'
 
     // --- ClientAuth ------------------------------------------------------
@@ -753,6 +834,13 @@ async function runResponder(options: DaemonChannelOptions, identity: DeviceIdent
     if (deadline) {
       clearTimeout(deadline)
       deadline = undefined
+    }
+    for (const queued of mailbox.drain()) {
+      if (phase !== 'session') break
+      deliverSealed(queued)
+    }
+    if (phase !== 'session') {
+      throw failure ?? new MeshChannelError('mesh/crypto', 'channel closed while draining queued frames', MeshCloseCode.CryptoError)
     }
 
     if (outcome.kind === 'pair-approval-required') {

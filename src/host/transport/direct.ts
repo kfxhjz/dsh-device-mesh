@@ -219,6 +219,10 @@ export async function startDirectListener(
     response.setHeader('content-type', 'text/plain; charset=utf-8')
     response.end('not found\n')
   })
+  // Bound raw pre-upgrade TCP sockets so a slowloris burst cannot pile up FDs
+  // during the upgrade-timeout window.
+  httpServer.maxConnections = Math.max(maxConnections * 4, 64)
+  httpServer.headersTimeout = Math.min(Math.max(1_000, upgradeTimeoutMs), 60_000)
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_WS_PAYLOAD_BYTES,
