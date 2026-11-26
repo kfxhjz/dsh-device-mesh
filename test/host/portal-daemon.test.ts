@@ -704,4 +704,83 @@ describe('portal-daemon: header helpers', () => {
     assert.equal(headers['x-custom'], 'keep')
     assert.equal(headers.accept, 'text/html')
   })
+
+  it('does not gzip HEAD responses', async () => {
+    const daemon = new PortalDaemon({
+      origin: 'http://127.0.0.1:45678',
+      getService: name => (name === 'connection' ? fakeConnection('http://127.0.0.1:45678') : undefined),
+      fetchImpl: async (input) => {
+        if (String(input).includes('token=')) {
+          return new Response(null, {
+            status: 303,
+            headers: { 'set-cookie': 'dsh-auth-abc123=the-secret-cookie; Max-Age=3600; Path=/' },
+          })
+        }
+        return new Response(null, {
+          status: 200,
+          headers: { 'content-type': 'text/javascript; charset=utf-8' },
+        })
+      },
+    })
+    try {
+      const response = await daemon.http(
+        { method: 'HEAD', path: '/assets/app.js', headers: {} },
+        streamOf(),
+        new AbortController().signal,
+      )
+      assert.equal(response.status, 200)
+      assert.equal(response.headers['content-encoding'], undefined)
+      assert.equal((await collect(response.body)).byteLength, 0)
+    } finally {
+      daemon.close()
+    }
+  })
+
+  it('fails closed when default WebSocket dial is pre-aborted or socket closes while backpressured', async () => {
+    const socket = new FakeSocket()
+    const daemon = new PortalDaemon({
+      origin: 'http://127.0.0.1:45678',
+      getService: name => (name === 'connection' ? fakeConnection('http://127.0.0.1:45678') : undefined),
+      fetchImpl: async () => new Response(null, {
+        status: 303,
+        headers: { 'set-cookie': 'dsh-auth-abc123=the-secret-cookie; Max-Age=3600; Path=/' },
+      }),
+      openWebSocket: async () => socket as unknown as PortalWebSocket,
+    })
+    try {
+      const controller = new AbortController()
+      const exchange = await daemon.ws({ path: '/api/remote.mux', headers: {} }, controller.signal)
+      socket.bufferedAmount = 16 * 1024 * 1024
+      const pendingWrite = exchange.outbound.write(encodeWsMessage(Buffer.from('blocked'), 'text'))
+      socket.readyState = 3
+      await assert.rejects(
+        pendingWrite,
+        (error: unknown) => error instanceof MeshRpcError && error.code === 'mesh/internal',
+      )
+    } finally {
+      daemon.close()
+    }
+
+    // Default opener with a pre-aborted signal must reject immediately without throwing uncaught errors.
+    const defaultDaemon = new PortalDaemon({
+      origin: 'http://127.0.0.1:1',
+      getService: name => (name === 'connection' ? fakeConnection('http://127.0.0.1:1') : undefined),
+      fetchImpl: async () => new Response(null, {
+        status: 303,
+        headers: { 'set-cookie': 'dsh-auth-abc123=the-secret-cookie; Max-Age=3600; Path=/' },
+      }),
+    })
+    try {
+      const preAborted = new AbortController()
+      preAborted.abort()
+      await assert.rejects(
+        () => defaultDaemon.ws({ path: '/api/remote.mux', headers: {} }, preAborted.signal),
+        (error: unknown) => error instanceof MeshRpcError
+          && error.code === 'portal/unavailable'
+          && error.message.includes('cancelled'),
+      )
+    } finally {
+      defaultDaemon.close()
+    }
+  })
 })

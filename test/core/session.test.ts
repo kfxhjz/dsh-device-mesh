@@ -891,3 +891,80 @@ test('ping/pong and events keep working alongside portal streams', async () => {
     pair.sessionB.close()
   }
 })
+
+test('bounds zero-byte HTTP and empty WebSocket frame floods without closing the session', async () => {
+  const ws = controllableWs()
+  const pair = createPair({
+    handlers: ws.handlers,
+    daemonSession: { maxInboundQueueBytes: 256 },
+  })
+  try {
+    const exchange = await pair.sessionA.ws({ path: '/ws', headers: {} })
+    // Send >64 empty WS messages without consuming them; the chunk-count cap
+    // must abort only this stream instead of growing the queue unboundedly.
+    for (let index = 0; index < 80; index += 1) {
+      pair.b.receive(streamFrame(1, 0x09, new Uint8Array(0)))
+    }
+    await assert.rejects(
+      collect(exchange.messages),
+      (error: unknown) => error instanceof MeshRpcError && error.code === 'mesh/busy',
+    )
+    assert.equal(pair.sessionA.open, true)
+    assert.equal(pair.sessionB.open, true)
+  } finally {
+    pair.sessionA.close()
+    pair.sessionB.close()
+  }
+})
+
+test('rejects protocol-relative portal paths in portal.http and portal.ws.open', async () => {
+  const pair = createPair()
+  try {
+    await assert.rejects(
+      pair.sessionA.http({ method: 'GET', path: '//evil.example/x', headers: {} }),
+      (error: unknown) => error instanceof MeshRpcError && error.code === 'mesh/bad-request',
+    )
+    await assert.rejects(
+      pair.sessionA.ws({ path: '//evil.example/ws', headers: {} }),
+      (error: unknown) => error instanceof MeshRpcError && error.code === 'mesh/bad-request',
+    )
+    assert.equal(pair.sessionA.open, true)
+  } finally {
+    pair.sessionA.close()
+    pair.sessionB.close()
+  }
+})
+
+test('strips malformed header names and non-Latin1 values from portal.http responses', async () => {
+  const pair = createPair({
+    handlers: {
+      rpc: async () => ({}),
+      http: async () => ({
+        status: 200,
+        headers: {
+          'content-type': 'text/plain',
+          'bad name': 'ignored',
+          'x-ctrl': 'ok\r\nX-Injected: 1',
+          'x-unicode': 'bad\u2028value',
+          'x-valid': 'ok',
+        },
+        body: (async function* () {
+          yield new TextEncoder().encode('ok')
+        })(),
+      }),
+      ws: async () => {
+        throw new MeshRpcError('mesh/unsupported', 'no ws')
+      },
+    },
+  })
+  try {
+    const response = await pair.sessionA.http({ method: 'GET', path: '/test', headers: {} })
+    assert.deepEqual(response.headers, { 'content-type': 'text/plain', 'x-valid': 'ok' })
+    for await (const _chunk of response.body) {
+      // drain
+    }
+  } finally {
+    pair.sessionA.close()
+    pair.sessionB.close()
+  }
+})

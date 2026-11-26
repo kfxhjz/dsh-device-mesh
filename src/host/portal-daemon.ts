@@ -39,6 +39,7 @@ import type {
 } from '../shared/protocol.ts'
 import { getHostService, HANDSHAKE_TIMEOUT_MS, isRecord, silentLogger } from './config.ts'
 import type { HostContextLike, MeshLogger } from './config.ts'
+import { terminateQuietly } from './transport/common.ts'
 import { encodePortalWsMessage, gunzipWsPayload } from './ws-compression.ts'
 
 /** HTTP methods the daemon proxy accepts from a controller portal. */
@@ -540,8 +541,11 @@ export class PortalDaemon {
       readonly signal: AbortSignal
     },
   ): Promise<PortalWebSocket> {
+    if (options.signal.aborted) {
+      throw new MeshRpcError('portal/unavailable', 'portal WebSocket dial was cancelled')
+    }
     const protocols = options.protocols ?? []
-    const socket = new WebSocket(
+    const rawSocket = new WebSocket(
       url,
       protocols.length > 0 ? [...protocols] : undefined,
       {
@@ -550,35 +554,43 @@ export class PortalDaemon {
         maxPayload: 16 * 1024 * 1024,
         perMessageDeflate: false,
       },
-    ) as unknown as PortalWebSocket
+    )
+    const socket = rawSocket as unknown as PortalWebSocket
     return new Promise<PortalWebSocket>((resolve, reject) => {
-      const onAbort = (): void => {
-        try {
-          socket.terminate()
-        } catch {
-          // Ignore: the socket may already be gone.
-        }
-        reject(new MeshRpcError('portal/unavailable', 'portal WebSocket dial was cancelled'))
+      let settled = false
+      const settle = (fn: () => void): void => {
+        if (settled) return
+        settled = true
+        options.signal.removeEventListener('abort', onAbort)
+        fn()
       }
-      if (options.signal.aborted) {
-        onAbort()
-        return
+      // Attach an error listener immediately so terminating a CONNECTING socket
+      // can never emit an uncaught `'error'` event on the next tick.
+      rawSocket.on('error', (error: Error) => {
+        settle(() => {
+          reject(new MeshRpcError('portal/unavailable', `local DSH WebSocket failed: ${error.message}`))
+        })
+      })
+      const onAbort = (): void => {
+        terminateQuietly(rawSocket)
+        settle(() => {
+          reject(new MeshRpcError('portal/unavailable', 'portal WebSocket dial was cancelled'))
+        })
       }
       options.signal.addEventListener('abort', onAbort, { once: true })
-      socket.on('open', () => {
-        options.signal.removeEventListener('abort', onAbort)
-        resolve(socket)
+      rawSocket.once('open', () => {
+        settle(() => {
+          resolve(socket)
+        })
       })
-      socket.on('error', (error: Error) => {
-        options.signal.removeEventListener('abort', onAbort)
-        reject(new MeshRpcError('portal/unavailable', `local DSH WebSocket failed: ${error.message}`))
-      })
-      socket.on('unexpected-response', (_request, response) => {
-        options.signal.removeEventListener('abort', onAbort)
-        reject(new MeshRpcError(
-          'portal/unavailable',
-          `local DSH WebSocket upgrade was rejected (status ${String(response.statusCode ?? 'unknown')})`,
-        ))
+      rawSocket.once('unexpected-response', (_request, response) => {
+        terminateQuietly(rawSocket)
+        settle(() => {
+          reject(new MeshRpcError(
+            'portal/unavailable',
+            `local DSH WebSocket upgrade was rejected (status ${String(response.statusCode ?? 'unknown')})`,
+          ))
+        })
       })
     })
   }
@@ -621,18 +633,16 @@ export class PortalDaemon {
     const baseInit: RequestInit = { method, headers, redirect: 'manual', signal }
     const init = this.applyBody(baseInit, requestBody)
     let response = await this.fetchWithTimeout(`${origin}${path}`, init)
-    if (response.status === 401) {
+    if (response.status === 401 && (requestBody === undefined || requestBody.replay !== undefined)) {
       // The browser session expired (or the process rotated its secret).
       await response.body?.cancel().catch(() => {})
-      if (requestBody === undefined || requestBody.replay !== undefined) {
-        const refreshed = await this.ensureCookie(true)
-        const retryHeaders = sanitizeProxyRequestHeaders(params.headers, origin, refreshed.pair, path)
-        const retryInit: RequestInit = { method, headers: retryHeaders, redirect: 'manual', signal }
-        response = await this.fetchWithTimeout(
-          `${origin}${path}`,
-          this.applyBody(retryInit, requestBody),
-        )
-      }
+      const refreshed = await this.ensureCookie(true)
+      const retryHeaders = sanitizeProxyRequestHeaders(params.headers, origin, refreshed.pair, path)
+      const retryInit: RequestInit = { method, headers: retryHeaders, redirect: 'manual', signal }
+      response = await this.fetchWithTimeout(
+        `${origin}${path}`,
+        this.applyBody(retryInit, requestBody),
+      )
     }
 
     const status = response.status
@@ -641,8 +651,8 @@ export class PortalDaemon {
       resultHeaders[name] = name === 'location' ? rewriteLocation(value, origin) : value
     })
     const sanitized = sanitizeUpstreamResponseHeaders(resultHeaders)
-    let resultBody: ChunkStream = this.streamFromWeb(response)
-    if (status === 200 && this.compressible(sanitized['content-type'])) {
+    let resultBody: ChunkStream = this.streamFromWeb(response, signal)
+    if (method !== 'HEAD' && status === 200 && this.compressible(sanitized['content-type'])) {
       resultBody = gzipChunks(resultBody)
       sanitized['content-encoding'] = 'gzip'
     }
@@ -675,9 +685,10 @@ export class PortalDaemon {
     const connect = async (cookiePair: string): Promise<PortalWebSocket> => {
       const headers = sanitizeProxyRequestHeaders(params.headers, origin, cookiePair, path)
       const controller = new AbortController()
-      const relayAbort = (): void =>{  controller.abort() }
-      signal.addEventListener('abort', relayAbort, { once: true })
-      const timeout = setTimeout(() =>{  controller.abort() }, HANDSHAKE_TIMEOUT_MS)
+      const relayAbort = (): void => { controller.abort() }
+      if (signal.aborted) controller.abort()
+      else signal.addEventListener('abort', relayAbort, { once: true })
+      const timeout = setTimeout(() => { controller.abort() }, HANDSHAKE_TIMEOUT_MS)
       timeout.unref?.()
       try {
         return await this.openSocket(`${wsOrigin}${path}`, {
@@ -696,7 +707,7 @@ export class PortalDaemon {
       socket = await connect(cookie.pair)
     } catch (error) {
       // Mirror the HTTP path: one cookie refresh on a rejected upgrade.
-      if (error instanceof MeshRpcError && /status 401/u.test(error.message)) {
+      if (!signal.aborted && error instanceof MeshRpcError && /status 401/u.test(error.message)) {
         const refreshed = await this.ensureCookie(true)
         socket = await connect(refreshed.pair)
       } else {
@@ -824,7 +835,12 @@ export class PortalDaemon {
           throw new MeshRpcError('mesh/bad-request', 'compressed portal message was not negotiated')
         }
         const payload = message.compressed ? await gunzipWsPayload(message.payload) : message.payload
-        while (socket.bufferedAmount > 8 * 1024 * 1024) await delay(10)
+        while (socket.bufferedAmount > 8 * 1024 * 1024 && socket.readyState === 1 && !signal.aborted) {
+          await delay(10)
+        }
+        if (socket.readyState !== 1 || signal.aborted) {
+          throw new MeshRpcError('mesh/internal', 'portal WebSocket is closed')
+        }
         // Text frames must stay text on the local DSH wire; binary frames must
         // not be coerced to UTF-8 (C1).
         if (message.kind === 'text') socket.send(new TextDecoder().decode(payload))
@@ -1150,25 +1166,44 @@ export class PortalDaemon {
     return /(?:javascript|ecmascript|text\/css|text\/plain|application\/json|image\/svg)/iu.test(contentType)
   }
 
-  private async *streamFromWeb(response: Response): AsyncGenerator<Uint8Array> {
+  private async *streamFromWeb(response: Response, signal?: AbortSignal): AsyncGenerator<Uint8Array> {
     const body = response.body
     if (body === null) return
+    const isAborted = (): boolean => signal?.aborted === true
+    if (isAborted()) {
+      await body.cancel().catch(() => undefined)
+      throw new MeshRpcError('mesh/internal', 'portal request was cancelled')
+    }
     const reader = body.getReader()
+    const onAbort = (): void => {
+      void reader.cancel().catch(() => undefined)
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
     try {
       for (;;) {
+        if (isAborted()) {
+          throw new MeshRpcError('mesh/internal', 'portal request was cancelled')
+        }
         let next: ReadableStreamReadResult<Uint8Array>
         try {
           next = await reader.read()
         } catch (error) {
+          if (isAborted()) {
+            throw new MeshRpcError('mesh/internal', 'portal request was cancelled')
+          }
           const detail = error instanceof Error ? error.message : String(error)
           this.lastErrorValue = detail
           this.logger.warn(`device-mesh: local DSH portal response failed mid-body: ${detail}`)
           throw new MeshRpcError('portal/upstream-error', `local DSH response failed: ${detail}`)
         }
+        if (isAborted()) {
+          throw new MeshRpcError('mesh/internal', 'portal request was cancelled')
+        }
         if (next.done) return
         if (next.value !== undefined) yield next.value
       }
     } finally {
+      signal?.removeEventListener('abort', onAbort)
       await reader.cancel().catch(() => undefined)
     }
   }

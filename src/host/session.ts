@@ -194,12 +194,14 @@ class InputStream implements ChunkStream {
   private failure: MeshRpcError | null = null
   private cancelled = false
   private readonly maxQueuedBytes: number
+  private readonly maxQueuedChunks: number
   private readonly onOverflow: () => void
   private readonly onCancel: (() => void) | undefined
 
   constructor(options: InputStreamOptions) {
     this.messageBoundaries = options.messageBoundaries
     this.maxQueuedBytes = options.maxQueuedBytes
+    this.maxQueuedChunks = Math.max(64, Math.min(4096, Math.ceil(options.maxQueuedBytes / 64)))
     this.onOverflow = options.onOverflow
     this.onCancel = options.onCancel
   }
@@ -210,9 +212,10 @@ class InputStream implements ChunkStream {
     if (this.messageBoundaries) {
       if (chunk.length > 0) {
         // A WebSocket message is assembled from many stream frames. Bound the
-        // *accumulated* message, not just the completed-message queue: without
-        // this a peer can stream an endless message and bypass the cap.
-        if (this.messageBytes + chunk.length > this.maxQueuedBytes) {
+        // *accumulated* message (both bytes and fragment count), not just the
+        // completed-message queue: without this a peer can stream an endless
+        // message or millions of tiny fragments and bypass the cap.
+        if (this.messageBytes + chunk.length > this.maxQueuedBytes || this.message.length >= this.maxQueuedChunks) {
           this.fail('mesh/busy', 'websocket message too large')
           this.onOverflow()
           return
@@ -228,6 +231,9 @@ class InputStream implements ChunkStream {
       }
       return
     }
+    // Empty chunks carry no HTTP body data; ignore them so a peer cannot fill
+    // the queue with zero-byte frames without advancing `queuedBytes`.
+    if (chunk.length === 0) return
     this.enqueue(chunk)
   }
 
@@ -277,7 +283,7 @@ class InputStream implements ChunkStream {
   private enqueue(chunk: Uint8Array): void {
     this.queuedBytes += chunk.length
     this.chunks.push(chunk)
-    if (this.queuedBytes > this.maxQueuedBytes) {
+    if (this.queuedBytes > this.maxQueuedBytes || this.chunks.length > this.maxQueuedChunks) {
       this.fail('mesh/busy', 'inbound stream buffer overflow')
       this.onOverflow()
       return
@@ -613,7 +619,12 @@ export class MeshSessionImpl implements DaemonMeshSession {
         void this.endStreamSafe(streamId)
       }
       const result = await resultPromise
-      if (!isPlainObject(result) || typeof result.status !== 'number' || !isPlainObject(result.headers)) {
+      if (
+        !isPlainObject(result)
+        || result.streamId !== streamId
+        || typeof result.status !== 'number'
+        || !isPlainObject(result.headers)
+      ) {
         throw new MeshRpcError('mesh/bad-request', 'invalid portal.http result')
       }
       return {
@@ -1494,11 +1505,26 @@ export class MeshSessionImpl implements DaemonMeshSession {
 // ---------------------------------------------------------------------------
 
 const HTTP_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])
+const HEADER_NAME_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u
+const INVALID_HEADER_VALUE_PATTERN = /[^\t\u0020-\u007e\u0080-\u00ff]/u
 
 function normalizeHeaders(value: Record<string, unknown>): Record<string, string> {
   const headers: Record<string, string> = {}
+  let count = 0
   for (const [key, headerValue] of Object.entries(value)) {
-    if (typeof headerValue === 'string' && key.length > 0 && key.length <= 256) headers[key] = headerValue
+    if (count >= 64) break
+    if (
+      typeof headerValue !== 'string'
+      || key.length === 0
+      || key.length > 256
+      || !HEADER_NAME_PATTERN.test(key)
+      || Buffer.byteLength(headerValue, 'utf8') > 8192
+      || INVALID_HEADER_VALUE_PATTERN.test(headerValue)
+    ) {
+      continue
+    }
+    headers[key] = headerValue
+    count += 1
   }
   return headers
 }
@@ -1533,7 +1559,12 @@ function parsePortalHttpParams(value: unknown):
   const streamId = parseStreamId(value.streamId, 'controller')
   if (streamId === undefined) return undefined
   if (typeof value.method !== 'string' || !HTTP_METHODS.has(value.method)) return undefined
-  if (typeof value.path !== 'string' || !value.path.startsWith('/') || value.path.length > 8192) return undefined
+  if (
+    typeof value.path !== 'string'
+    || !value.path.startsWith('/')
+    || value.path.startsWith('//')
+    || value.path.length > 8192
+  ) return undefined
   if (/[\u0000-\u001f\u007f]/u.test(value.path)) return undefined
   const headers = parseHeaders(value.headers)
   if (!headers) return undefined
@@ -1552,7 +1583,12 @@ function parsePortalWsParams(
   if (!isPlainObject(value)) return undefined
   const streamId = parseStreamId(value.streamId, 'controller')
   if (streamId === undefined) return undefined
-  if (typeof value.path !== 'string' || !value.path.startsWith('/') || value.path.length > 8192) return undefined
+  if (
+    typeof value.path !== 'string'
+    || !value.path.startsWith('/')
+    || value.path.startsWith('//')
+    || value.path.length > 8192
+  ) return undefined
   if (/[\u0000-\u001f\u007f]/u.test(value.path)) return undefined
   const headers = parseHeaders(value.headers)
   if (!headers) return undefined

@@ -1173,13 +1173,206 @@ describe('portal-controller: header helpers', () => {
   it('caps manifest reads and survives oversized bodies (S5)', async () => {
     assert.equal(await readLimitedText(streamOf('a', 'b'), 16, 1_000), 'ab')
     assert.equal(await readLimitedText(streamOf('a'.repeat(64)), 16, 1_000), undefined)
-    async function* slow(): AsyncGenerator<Uint8Array> {
-      await new Promise(() => {})
+    const slow = {
+      [Symbol.asyncIterator]: () => ({ next: () => new Promise<IteratorResult<Uint8Array>>(() => {}) }),
     }
-    assert.equal(await readLimitedText(slow(), 16, 20), undefined)
+    assert.equal(await readLimitedText(slow, 16, 20), undefined)
   })
 
   it('collects streamed bodies', async () => {
     assert.equal((await collect(streamOf('a', 'b'))).toString('utf8'), 'ab')
+  })
+
+  it('rejects malformed targets and never open-redirects on multi-slash paths', async () => {
+    const portal = await PortalController.open({
+      session: new FakeMeshSession(),
+      deviceId: 'dm_device',
+      token: 'slash-token',
+      idleTimeoutMs: 60_000,
+    })
+    try {
+      const triple = await rawHttp(`${portal.origin}/`, { method: 'GET' })
+      assert.equal(triple.status, 403)
+      // Multi-slash request target with valid token must collapse leading slashes
+      // and never emit a protocol-relative `Location: //evil.example/`.
+      const redirected = await new Promise<RawHttpResult>((resolve, reject) => {
+        const request = httpRequest({
+          hostname: '127.0.0.1',
+          port: portal.port,
+          path: '///evil.example/?token=slash-token',
+          method: 'GET',
+          headers: { host: `127.0.0.1:${portal.port}` },
+        }, (response) => {
+          const chunks: Buffer[] = []
+          response.on('data', chunk => chunks.push(Buffer.from(chunk)))
+          response.on('end', () => {
+            resolve({
+              status: response.statusCode ?? 0,
+              headers: response.headers,
+              body: Buffer.concat(chunks).toString('utf8'),
+            })
+          })
+        })
+        request.on('error', reject)
+        request.end()
+      })
+      assert.equal(redirected.status, 303)
+      const location = String(redirected.headers.location ?? '')
+      assert.ok(location.startsWith('/') && !location.startsWith('//'), `unexpected redirect location: ${location}`)
+
+      // Backslash authority smuggling (`/\evil.example`) resolves to another origin and must return 400.
+      const backslash = await new Promise<RawHttpResult>((resolve, reject) => {
+        const request = httpRequest({
+          hostname: '127.0.0.1',
+          port: portal.port,
+          path: '/\\evil.example/?token=slash-token',
+          method: 'GET',
+          headers: { host: `127.0.0.1:${portal.port}` },
+        }, (response) => {
+          const chunks: Buffer[] = []
+          response.on('data', chunk => chunks.push(Buffer.from(chunk)))
+          response.on('end', () => {
+            resolve({
+              status: response.statusCode ?? 0,
+              headers: response.headers,
+              body: Buffer.concat(chunks).toString('utf8'),
+            })
+          })
+        })
+        request.on('error', reject)
+        request.end()
+      })
+      assert.equal(backslash.status, 400)
+    } finally {
+      await portal.close()
+    }
+  })
+
+  it('stores sanitized response headers in the asset cache so malformed headers never crash hits', async () => {
+    const cacheDir = await mkdtemp(join(tmpdir(), 'dm-portal-cache-hdr-'))
+    try {
+      const html = '<html><head><script src="/assets/app-safe.js"></script></head></html>'
+      const session = new FakeMeshSession({
+        http: async (params) => {
+          if (params.path === '/') {
+            return {
+              streamId: 1,
+              status: 200,
+              headers: { 'content-type': 'text/html; charset=utf-8' },
+              body: streamOf(html),
+            }
+          }
+          return {
+            streamId: 1,
+            status: 200,
+            headers: {
+              'content-type': 'text/javascript\r\nX-Injected: 1',
+              'content-encoding': 'gzip\r\nBad: 1',
+            },
+            body: streamOf('console.log(1)'),
+          }
+        },
+      })
+      const portal = await PortalController.open({
+        session,
+        deviceId: 'dm_hdr_device',
+        token: 'hdr-token',
+        idleTimeoutMs: 60_000,
+        cacheDir,
+      })
+      try {
+        const login = await fetch(portal.url, { redirect: 'manual' })
+        const cookie = cookieFrom(login)
+        const first = await fetch(`${portal.origin}/assets/app-safe.js`, {
+          headers: { cookie, 'sec-fetch-site': 'same-origin' },
+        })
+        assert.equal(first.status, 200)
+        assert.equal(await first.text(), 'console.log(1)')
+
+        const second = await fetch(`${portal.origin}/assets/app-safe.js`, {
+          headers: { cookie, 'sec-fetch-site': 'same-origin' },
+        })
+        assert.equal(second.status, 200)
+        assert.equal(second.headers.get('x-dm-cache'), 'hit')
+        assert.equal(second.headers.get('content-type'), 'application/octet-stream')
+        assert.equal(second.headers.get('content-encoding'), null)
+        assert.equal(await second.text(), 'console.log(1)')
+      } finally {
+        await portal.close()
+      }
+    } finally {
+      await rm(cacheDir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not retry a WebSocket upgrade when the error is not a lost session', async () => {
+    let wsCalls = 0
+    const session = new FakeMeshSession({
+      ws: async () => {
+        wsCalls += 1
+        throw new MeshRpcError('portal/unavailable', 'local DSH WebSocket upgrade was rejected (status 403)')
+      },
+    })
+    const portal = await PortalController.open({
+      session,
+      deviceId: 'dm_ws_noretry',
+      token: 'ws-noretry-token',
+      idleTimeoutMs: 60_000,
+    })
+    try {
+      const status = await wsRejectStatus(`${portal.origin.replace('http:', 'ws:')}/ws?token=ws-noretry-token`, {
+        origin: portal.origin,
+      })
+      assert.equal(status, 503)
+      assert.equal(wsCalls, 1)
+    } finally {
+      await portal.close()
+    }
+  })
+
+  it('aborts an in-flight WebSocket upgrade cleanly when the portal closes mid-dial', async () => {
+    let markWsEntered!: () => void
+    const wsEntered = new Promise<void>((resolve) => { markWsEntered = resolve })
+    let releaseWs!: () => void
+    const wsGate = new Promise<void>((resolve) => { releaseWs = resolve })
+    let abortedReason: string | undefined
+    const session = new FakeMeshSession({
+      ws: async () => {
+        markWsEntered()
+        await wsGate
+        return {
+          messages: {
+            messageBoundaries: true as const,
+            [Symbol.asyncIterator]: () => ({
+              next: async () => ({ done: true as const, value: undefined }),
+              return: async () => ({ done: true as const, value: undefined }),
+            }),
+          },
+          sink: {
+            write: async () => {},
+            end: async () => {},
+            sendMessage: async () => {},
+            close: async () => {},
+            abort: async (reason?: string) => { abortedReason = reason },
+          },
+        }
+      },
+    })
+    const portal = await PortalController.open({
+      session,
+      deviceId: 'dm_ws_close_race',
+      token: 'ws-close-race-token',
+      idleTimeoutMs: 60_000,
+    })
+    const statusPromise = wsRejectStatus(`${portal.origin.replace('http:', 'ws:')}/ws?token=ws-close-race-token`, {
+      origin: portal.origin,
+    }).catch(() => -1)
+    await wsEntered
+    const closing = portal.close()
+    releaseWs()
+    await closing
+    await statusPromise
+    assert.equal(abortedReason, 'portal closed')
+    assert.equal(portal.lastError, undefined)
   })
 })

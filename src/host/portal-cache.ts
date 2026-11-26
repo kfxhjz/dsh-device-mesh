@@ -8,12 +8,28 @@
  * Mesh session, so opening a previously used remote DSH skips the ~7 MB
  * transfer (and a transient reconnect cannot truncate a cached bundle).
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 /** Immutable GUI asset prefixes the portal may cache. */
 const ASSET_PREFIXES = ['/assets/', '/locales/', '/fonts/'] as const
+
+/** Characters Node rejects in HTTP header values (including CR/LF and NUL). */
+const INVALID_HEADER_VALUE_PATTERN = /[^\t\u0020-\u007e\u0080-\u00ff]/u
+
+/** Maximum length accepted for cached header metadata values. */
+const MAX_META_HEADER_BYTES = 8192
+
+/** Stale temporary files older than this are swept during eviction. */
+const STALE_TEMP_AGE_MS = 5 * 60 * 1000
+
+function isValidHeaderValue(value: unknown): value is string {
+  return typeof value === 'string'
+    && value.length > 0
+    && Buffer.byteLength(value, 'utf8') <= MAX_META_HEADER_BYTES
+    && !INVALID_HEADER_VALUE_PATTERN.test(value)
+}
 
 /** Default disk budget for cached assets (bytes). */
 export const DEFAULT_PORTAL_CACHE_BYTES = 256 * 1024 * 1024
@@ -93,7 +109,9 @@ export class PortalCache {
         readFile(join(this.directory, `${key}.bin`)),
         readFile(join(this.directory, `${key}.json`), 'utf8'),
       ])
-      const meta = JSON.parse(raw) as CacheMeta
+      const meta = JSON.parse(raw) as Partial<CacheMeta>
+      if (!isValidHeaderValue(meta.contentType)) return undefined
+      if (meta.contentEncoding !== undefined && !isValidHeaderValue(meta.contentEncoding)) return undefined
       return {
         body,
         contentType: meta.contentType,
@@ -115,6 +133,10 @@ export class PortalCache {
     contentEncoding?: string,
   ): Promise<void> {
     if (!isImmutableAsset(pathname, search) || body.byteLength === 0) return
+    if (!isValidHeaderValue(contentType)) return
+    if (contentEncoding !== undefined && !isValidHeaderValue(contentEncoding)) return
+    let tempBin: string | undefined
+    let tempMeta: string | undefined
     try {
       await this.ensure()
       const key = digest(deviceId, manifest, pathname, search)
@@ -124,10 +146,15 @@ export class PortalCache {
         path: `${pathname}${search}`,
         storedAt: new Date().toISOString(),
       }
-      const temp = join(this.directory, `.${key}.tmp`)
-      await writeFile(temp, body, { mode: 0o600 })
-      await rename(temp, join(this.directory, `${key}.bin`))
-      await writeFile(join(this.directory, `${key}.json`), JSON.stringify(meta), { mode: 0o600 })
+      const suffix = `${process.pid}.${randomBytes(4).toString('hex')}`
+      tempBin = join(this.directory, `.${key}.${suffix}.bin.tmp`)
+      tempMeta = join(this.directory, `.${key}.${suffix}.json.tmp`)
+      await writeFile(tempBin, body, { mode: 0o600 })
+      await rename(tempBin, join(this.directory, `${key}.bin`))
+      tempBin = undefined
+      await writeFile(tempMeta, JSON.stringify(meta), { mode: 0o600 })
+      await rename(tempMeta, join(this.directory, `${key}.json`))
+      tempMeta = undefined
       this.pendingBytes += body.byteLength + 256
       this.pendingWrites += 1
       if (this.pendingWrites >= 64 || this.pendingBytes >= this.evictThresholdBytes) {
@@ -135,6 +162,8 @@ export class PortalCache {
       }
     } catch {
       // A cache write must never fail the proxied request.
+      if (tempBin !== undefined) await unlink(tempBin).catch(() => undefined)
+      if (tempMeta !== undefined) await unlink(tempMeta).catch(() => undefined)
     }
   }
 
@@ -149,24 +178,39 @@ export class PortalCache {
     return this.evicting
   }
 
-  /** Drop the oldest cache entries until the disk budget is respected. */
+  /** Drop the oldest cache entry pairs until the disk budget is respected. */
   private async evict(): Promise<void> {
     try {
-      const entries: Array<{ readonly path: string; readonly mtime: number; readonly size: number }> = []
+      const now = Date.now()
+      const groups = new Map<string, { readonly files: string[]; mtime: number; size: number }>()
       let total = 0
       for (const name of await readdir(this.directory)) {
-        if (!name.endsWith('.bin') && !name.endsWith('.json')) continue
         const path = join(this.directory, name)
         const info = await stat(path).catch(() => undefined)
         if (info === undefined || !info.isFile()) continue
-        entries.push({ path, mtime: info.mtimeMs, size: info.size })
+        if (name.endsWith('.tmp')) {
+          if (now - info.mtimeMs > STALE_TEMP_AGE_MS) await unlink(path).catch(() => undefined)
+          continue
+        }
+        let key: string | undefined
+        if (name.endsWith('.bin')) key = name.slice(0, -4)
+        else if (name.endsWith('.json')) key = name.slice(0, -5)
+        if (key === undefined || key.length === 0) continue
+        const existing = groups.get(key)
+        if (existing === undefined) {
+          groups.set(key, { files: [path], mtime: info.mtimeMs, size: info.size })
+        } else {
+          existing.files.push(path)
+          existing.mtime = Math.max(existing.mtime, info.mtimeMs)
+          existing.size += info.size
+        }
         total += info.size
       }
       if (total <= this.maxBytes) return
-      entries.sort((left, right) => left.mtime - right.mtime)
+      const entries = [...groups.values()].sort((left, right) => left.mtime - right.mtime)
       for (const entry of entries) {
         if (total <= this.maxBytes) break
-        await unlink(entry.path).catch(() => undefined)
+        for (const file of entry.files) await unlink(file).catch(() => undefined)
         total -= entry.size
       }
     } catch {

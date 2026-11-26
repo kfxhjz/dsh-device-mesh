@@ -19,7 +19,6 @@
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
-import { once } from 'node:events'
 import { createServer } from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { Duplex } from 'node:stream'
@@ -713,19 +712,25 @@ export class PortalController {
   }
 
   /**
-   * Parse the request target defensively. Browsers may send `//` as a
-   * protocol-relative-looking path (e.g. after URL rewrites), which the WHATWG
-   * URL constructor rejects when used as a relative reference; normalise it to
-   * an ordinary absolute path before resolving against the portal origin.
+   * Parse the request target defensively. Browsers may send `//` (or `///`) as
+   * a protocol-relative-looking path (e.g. after URL rewrites), which the
+   * WHATWG URL constructor treats as another authority or rejects; collapse all
+   * leading slashes, catch malformed targets, and require the resolved URL to
+   * stay on this portal's exact origin.
    */
-  private targetUrl(request: IncomingMessage): URL {
+  private targetUrl(request: IncomingMessage): URL | undefined {
     const raw = request.url ?? '/'
-    const normalized = raw.startsWith('//')
-      ? raw.slice(1)
-      : raw.startsWith('/')
-        ? raw
-        : `/${raw}`
-    return new URL(normalized, this.portalOrigin())
+    const normalized = raw.startsWith('/')
+      ? raw.replace(/^\/+/u, '/')
+      : `/${raw}`
+    let parsed: URL
+    try {
+      parsed = new URL(normalized, this.portalOrigin())
+    } catch {
+      return undefined
+    }
+    if (parsed.origin !== this.portalOrigin()) return undefined
+    return parsed
   }
 
   private authorize(request: IncomingMessage, url: URL, upgrade = false): AuthResult {
@@ -741,7 +746,8 @@ export class PortalController {
       // WebSocket directly (the browser page has the cookie by then anyway).
       if (!upgrade && (request.method === 'GET' || request.method === 'HEAD')) {
         const search = url.searchParams.toString()
-        const location = `${url.pathname}${search.length > 0 ? `?${search}` : ''}`
+        const safePath = url.pathname.replace(/^\/+/u, '/')
+        const location = `${safePath}${search.length > 0 ? `?${search}` : ''}`
         return { kind: 'redirect', location }
       }
       return { kind: 'ok' }
@@ -786,7 +792,7 @@ export class PortalController {
     response.end(body)
   }
 
-  private rejectHttp(response: ServerResponse, status: 401 | 403, message: string): void {
+  private rejectHttp(response: ServerResponse, status: 400 | 401 | 403, message: string): void {
     response.writeHead(status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' })
     response.end(`${message}\n`)
   }
@@ -806,6 +812,10 @@ export class PortalController {
       return
     }
     const target = this.targetUrl(request)
+    if (target === undefined) {
+      this.rejectHttp(response, 400, 'invalid portal request target')
+      return
+    }
     const tokenEntry = target.searchParams.get('token') !== null
     const contextCheck = this.checkBrowserContext(request, false, tokenEntry)
     if (contextCheck.kind === 'reject') {
@@ -898,7 +908,7 @@ export class PortalController {
       const responseHeaders = sanitizeControllerResponseHeaders(exchange.headers)
       const status = sanitizeResponseStatus(exchange.status)
       if (exchange.bytes !== undefined) {
-        const html = /text\/html/iu.test(exchange.headers['content-type'] ?? '')
+        const html = /text\/html/iu.test(responseHeaders['content-type'] ?? '')
         const bytes = html && url.searchParams.get('dm-embed') === '1'
           ? Buffer.from(injectEmbedShell(
             Buffer.from(exchange.bytes).toString('utf8'),
@@ -913,8 +923,8 @@ export class PortalController {
             url.pathname,
             url.search,
             bytes,
-            exchange.headers['content-type'] ?? 'application/octet-stream',
-            exchange.headers['content-encoding'],
+            responseHeaders['content-type'] ?? 'application/octet-stream',
+            responseHeaders['content-encoding'],
           )
         }
         response.writeHead(status, {
@@ -936,7 +946,7 @@ export class PortalController {
       try {
         for await (const chunk of exchange.body as ChunkStream) {
           if (aborted || response.destroyed) break
-          if (!response.write(chunk)) await once(response, 'drain')
+          if (!response.write(chunk)) await waitForResponseDrain(response)
         }
       } catch (error) {
         // Headers already went out, so the status is fixed. If the reason is a
@@ -1125,6 +1135,10 @@ export class PortalController {
         return
       }
       const url = this.targetUrl(request)
+      if (url === undefined) {
+        rawHttpResponse(socket, 400, 'invalid portal request target')
+        return
+      }
       const auth = this.authorize(request, url, true)
       if (auth.kind === 'reject') {
         rawHttpResponse(socket, auth.status, auth.message)
@@ -1175,14 +1189,19 @@ export class PortalController {
           if (!this.session.open) throw new MeshRpcError('mesh/internal', 'device session is reconnecting')
           exchange = await this.session.ws(wsParams)
         } catch (error) {
-          // One retry when a reconnect adopted a fresh session meanwhile.
-          if (!await this.waitForOpenSession(ASSET_RETRY_WAIT_MS)) throw error
+          // One retry when the Mesh session dropped and a reconnect adopted a fresh one.
+          if (!sessionLost(error) || !await this.waitForOpenSession(ASSET_RETRY_WAIT_MS)) throw error
           exchange = await this.session.ws(wsParams)
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'remote portal WebSocket failed'
         this.lastErrorValue = message
         rawHttpResponse(socket, statusForError(error, this.session.open), message)
+        return
+      }
+      if (this.closed || this.wss === undefined) {
+        abortExchange('portal closed')
+        if (!socket.destroyed) rawHttpResponse(socket, 503, 'portal is closed')
         return
       }
       if (browserGone || socket.destroyed) {
@@ -1307,7 +1326,9 @@ export class PortalController {
       // Carry the opcode across the byte-oriented Mesh framing (C1).
       const kind = isBinary ? 'binary' : 'text'
       if (!compress) {
-        void exchange.sink.sendMessage(encodeWsMessage(bytes, kind)).catch(failClient)
+        outboundChain = outboundChain
+          .then(() => exchange.sink.sendMessage(encodeWsMessage(bytes, kind)))
+          .catch(failClient)
         return
       }
       pendingOutboundBytes += bytes.byteLength
@@ -1380,6 +1401,22 @@ export class PortalController {
       }
     })()
   }
+}
+
+/** Resolve when a paused ServerResponse drains or closes/errors so aborted clients cannot hang. */
+function waitForResponseDrain(response: ServerResponse): Promise<void> {
+  if (response.destroyed || response.writableEnded) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    const done = (): void => {
+      response.off('drain', done)
+      response.off('close', done)
+      response.off('error', done)
+      resolve()
+    }
+    response.once('drain', done)
+    response.once('close', done)
+    response.once('error', done)
+  })
 }
 
 /** Resolve with `undefined` when `promise` does not settle within `ms`. */

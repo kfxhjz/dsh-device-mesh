@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
@@ -44,6 +44,50 @@ describe('portal asset cache', () => {
       assert.equal(await cache.get('dm_dev', 'manifest', '/assets/a.js', ''), undefined)
       const newest = await cache.get('dm_dev', 'manifest', '/assets/c.js', '')
       assert.equal(newest?.body.length, 200)
+      // Eviction removes .bin and .json pairs together without leaving orphans.
+      const files = await readdir(directory)
+      const bins = files.filter(name => name.endsWith('.bin')).map(name => name.slice(0, -4)).sort()
+      const jsons = files.filter(name => name.endsWith('.json')).map(name => name.slice(0, -5)).sort()
+      assert.deepEqual(bins, jsons)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects tampered metadata containing control characters in cached headers', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dm-cache-meta-'))
+    try {
+      const cache = new PortalCache(directory)
+      await cache.put('dm_dev', 'manifest', '/assets/app.js', '', Buffer.from('ok'), 'text/javascript')
+      const files = await readdir(directory)
+      const jsonFile = files.find(name => name.endsWith('.json'))
+      assert.ok(jsonFile)
+      await writeFile(
+        join(directory, jsonFile),
+        JSON.stringify({ contentType: 'text/javascript\r\nX-Evil: 1', path: '/assets/app.js', storedAt: new Date().toISOString() }),
+      )
+      assert.equal(await cache.get('dm_dev', 'manifest', '/assets/app.js', ''), undefined)
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('refuses to cache assets with invalid content-encoding instead of stripping it', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'dm-cache-encoding-'))
+    try {
+      const cache = new PortalCache(directory)
+      await cache.put(
+        'dm_dev',
+        'manifest',
+        '/assets/bundle.js',
+        '',
+        Buffer.from('compressed-bytes'),
+        'text/javascript',
+        'gzip\r\nX-Injected: 1',
+      )
+      assert.equal(await cache.get('dm_dev', 'manifest', '/assets/bundle.js', ''), undefined)
+      const files = await readdir(directory)
+      assert.deepEqual(files, [])
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
