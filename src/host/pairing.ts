@@ -47,6 +47,9 @@ const PAIRING_FILE = 'pairing.json'
 /** How long a decided request stays answerable by `pair.status`. */
 const DECISION_RETENTION_MS = 5 * 60 * 1000
 
+/** Maximum active one-time tickets retained on disk; oldest are evicted first. */
+const MAX_ACTIVE_TICKETS = 32
+
 /** Maximum encoded ticket size accepted from a link (defensive bound). */
 const MAX_TICKET_BYTES = 8 * 1024
 
@@ -494,6 +497,11 @@ export class PairingService {
         if (expiresAt <= now) tickets.delete(hash)
       }
       tickets.set(created.tokenHash, created.ticket.exp * 1000)
+      while (tickets.size > MAX_ACTIVE_TICKETS) {
+        const oldest = tickets.keys().next()
+        if (oldest.done) break
+        tickets.delete(oldest.value)
+      }
       this.replaceTickets(tickets)
       return { result: undefined, next: pairingDocument(tickets) }
     })
@@ -523,14 +531,18 @@ export class PairingService {
     return await this.store.updatePrivateJson<PairTokenCheck>(PAIRING_FILE, (current) => {
       const tickets = readPersistedTickets(current)
       const now = this.now()
+      let dirty = false
       for (const [candidate, expiresAt] of tickets) {
-        if (expiresAt <= now) tickets.delete(candidate)
+        if (expiresAt <= now) {
+          tickets.delete(candidate)
+          dirty = true
+        }
       }
-      const refusal = (message: string): { result: PairTokenCheck; next: PairingFileDocument } => {
+      const refusal = (message: string): { result: PairTokenCheck; next?: PairingFileDocument } => {
         this.replaceTickets(tickets)
         return {
           result: { ok: false, code: 'mesh/unauthorized', message },
-          next: pairingDocument(tickets),
+          ...(dirty ? { next: pairingDocument(tickets) } : {}),
         }
       }
       const expiresAt = tickets.get(hash)
@@ -613,6 +625,7 @@ export class PairingService {
     entry.state = 'approved'
     entry.scope = scope ?? entry.scope ?? { kind: 'control', workspaces: 'all', expiresAt: null }
     if (entry.timer !== undefined) clearTimeout(entry.timer)
+    this.requests.delete(requestId)
     entry.resolve({ approved: true })
     this.decisions.set(requestId, {
       state: 'approved',
@@ -635,6 +648,7 @@ export class PairingService {
     if (entry === undefined || entry.state !== 'pending') return undefined
     entry.state = 'denied'
     if (entry.timer !== undefined) clearTimeout(entry.timer)
+    this.requests.delete(requestId)
     entry.resolve({ approved: false })
     this.decisions.set(requestId, {
       state: 'denied',
@@ -673,6 +687,7 @@ export class PairingService {
       entry.state = 'denied'
       if (entry.timer !== undefined) clearTimeout(entry.timer)
       entry.timer = undefined
+      this.requests.delete(entry.request.requestId)
       entry.resolve({ approved: false })
       this.decisions.set(entry.request.requestId, {
         state: 'denied',

@@ -109,15 +109,20 @@ async function rpcWithAuthorizationRetry<T>(
   session: MeshSession,
   method: string,
   params?: unknown,
+  signal?: AbortSignal,
 ): Promise<T> {
+  const isAborted = (): boolean => signal?.aborted === true
   const deadline = Date.now() + 2_000
   for (;;) {
+    if (isAborted()) {
+      throw new MeshRpcError('mesh/internal', 'operation was cancelled')
+    }
     try {
-      return await session.rpc<T>(method, params)
+      return await session.rpc<T>(method, params, signal === undefined ? {} : { signal })
     } catch (error) {
       const unauthorized = error instanceof MeshRpcError && error.code === 'mesh/unauthorized'
-      if (!unauthorized || !session.open || Date.now() > deadline) throw error
-      await delay(50)
+      if (!unauthorized || !session.open || Date.now() > deadline || isAborted()) throw error
+      await delay(50, signal)
     }
   }
 }
@@ -151,6 +156,7 @@ function createControllerConnector(
         appVersion,
         capabilities: [...CAPABILITIES],
         hostLabel: identity.name,
+        ...(options.signal === undefined ? {} : { signal: options.signal }),
       })
       try {
         if (session.pairing?.approval === 'pending') {
@@ -163,7 +169,7 @@ function createControllerConnector(
           // The daemon flips its authorization gate asynchronously after an
           // approval decision; retry briefly so a fast status poll cannot race
           // the first authorized RPC.
-          const info = await rpcWithAuthorizationRetry<MeshInfo>(session, 'info')
+          const info = await rpcWithAuthorizationRetry<MeshInfo>(session, 'info', undefined, options.signal)
           if (info.protocol !== PROTOCOL_VERSION) {
             throw new MeshRpcError('mesh/version-mismatch', 'peer protocol version is not supported')
           }

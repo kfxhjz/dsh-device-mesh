@@ -1043,51 +1043,54 @@ export class DeviceMeshBroker {
         `pairing link uses an unencrypted relay: ${insecure.join(', ')}; confirm the plaintext relay warning to continue`,
       )
     }
-    const existing = this.store.findPeer('daemons', ticket.id)
-    if (existing !== undefined) {
-      if (existing.revokedAt !== null) {
-        throw new PairingError('mesh/revoked', 'this device was revoked; forget it before pairing again')
+    const view = await this.exclusivePairing(async () => {
+      const existing = this.store.findPeer('daemons', ticket.id)
+      if (existing !== undefined) {
+        if (existing.revokedAt !== null) {
+          throw new PairingError('mesh/revoked', 'this device was revoked; forget it before pairing again')
+        }
+        if (existing.signPk !== ticket.signPk || existing.dhPk !== ticket.dhPk) {
+          throw new PairingError('mesh/unauthorized', 'paired device identity changed; forget it before pairing again')
+        }
       }
-      if (existing.signPk !== ticket.signPk || existing.dhPk !== ticket.dhPk) {
-        throw new PairingError('mesh/unauthorized', 'paired device identity changed; forget it before pairing again')
+      if (this.connector === undefined) {
+        throw new PairingError('mesh/unsupported', 'session layer is unavailable')
       }
-    }
-    if (this.connector === undefined) {
-      throw new PairingError('mesh/unsupported', 'session layer is unavailable')
-    }
-    const record: PeerRecord = {
-      deviceId: ticket.id,
-      name: ticket.name,
-      platform: ticket.platform,
-      signPk: ticket.signPk,
-      dhPk: ticket.dhPk,
-      scope: existing?.scope ?? defaultControlScope(),
-      pairedAt: existing?.pairedAt ?? nowIso(this.now),
-      lastSeenAt: nowIso(this.now),
-      revokedAt: null,
-      endpoints: ticket.eps,
-    }
-    await this.store.upsertPeer('daemons', record)
-    const runtime = this.runtimeFor(record.deviceId)
-    runtime.manualDisconnect = false
-    runtime.pairingTerminal = false
-    // Remember what to restore if the first-contact handshake never becomes an
-    // approved pairing (H3): a brand-new record is removed again, an existing
-    // one is restored.
-    runtime.pairingRollback = { previous: existing }
-    runtime.pairingSession = undefined
-    // A failed re-pair attempt must not hide an already working session (H4).
-    if (runtime.session?.open !== true) {
-      runtime.status = 'connecting'
-      runtime.detail = 'waiting for the controlled device to approve pairing'
-    }
+      const nextRecord: PeerRecord = {
+        deviceId: ticket.id,
+        name: ticket.name,
+        platform: ticket.platform,
+        signPk: ticket.signPk,
+        dhPk: ticket.dhPk,
+        scope: existing?.scope ?? defaultControlScope(),
+        pairedAt: existing?.pairedAt ?? nowIso(this.now),
+        lastSeenAt: nowIso(this.now),
+        revokedAt: null,
+        endpoints: ticket.eps,
+      }
+      await this.store.upsertPeer('daemons', nextRecord)
+      const nextRuntime = this.runtimeFor(nextRecord.deviceId)
+      nextRuntime.manualDisconnect = false
+      nextRuntime.pairingTerminal = false
+      // Remember what to restore if the first-contact handshake never becomes an
+      // approved pairing (H3): a brand-new record is removed again, an existing
+      // one is restored.
+      nextRuntime.pairingRollback = { previous: existing }
+      nextRuntime.pairingSession = undefined
+      // A failed re-pair attempt must not hide an already working session (H4).
+      if (nextRuntime.session?.open !== true) {
+        nextRuntime.status = 'connecting'
+        nextRuntime.detail = 'waiting for the controlled device to approve pairing'
+      }
+      // Start the attempt inside the pairing lock so concurrent `pairWithLink`
+      // calls preserve strict write/epoch order and cannot race `forgetPeer`.
+      const attempt = this.startAttempt(nextRuntime, (epoch, signal) =>
+        this.establishPairing(nextRecord, ticket, nextRuntime, epoch, signal))
+      attempt.catch(() => undefined)
+      return this.requireView(nextRecord.deviceId)
+    })
     this.changed()
-    // A second pairWithLink supersedes (and aborts) any in-flight attempt; only
-    // the generation that is still current may adopt a session.
-    const attempt = this.startAttempt(runtime, (epoch, signal) =>
-      this.establishPairing(record, ticket, runtime, epoch, signal))
-    attempt.catch(() => undefined)
-    return this.requireView(record.deviceId)
+    return view
   }
 
   /** Background half of {@link pairWithLink}: dial, handshake, adopt. */
@@ -1170,10 +1173,29 @@ export class DeviceMeshBroker {
     // A session that is already online stays authoritative: an attempt that
     // could not even establish a session must not turn it into an error (H4).
     if (runtime.session?.open === true) return
-    runtime.status = 'error'
-    runtime.detail = lastError === undefined
+    if (runtime.pairingTerminal) return
+    const detail = lastError === undefined
       ? 'no endpoint was reachable'
       : `pairing failed: ${errorCodeAndMessage(lastError)}`
+    runtime.pairingTerminal = true
+    runtime.epoch += 1
+    const rollbackEpoch = runtime.epoch
+    runtime.attemptAbort?.abort()
+    runtime.attemptAbort = undefined
+    runtime.pairingSession = undefined
+    runtime.connecting = undefined
+    runtime.manualDisconnect = true
+    runtime.status = 'error'
+    runtime.detail = detail
+    const rollback = runtime.pairingRollback
+    runtime.pairingRollback = undefined
+    if (rollback !== undefined) {
+      if (this.daemons.get(record.deviceId) === runtime && rollback.previous === undefined) {
+        this.daemons.delete(record.deviceId)
+      }
+      await this.rollbackFailedDaemonPeer(runtime, record.deviceId, rollbackEpoch, rollback)
+      await this.store.appendAudit({ action: 'session.closed', peer: record.deviceId, detail: 'pairing-failed' })
+    }
     this.changed()
   }
 
@@ -2025,6 +2047,7 @@ export class DeviceMeshBroker {
     runtime.pairingTerminal = true
     // Invalidate every other in-flight operation (and any watcher iteration).
     runtime.epoch += 1
+    const rollbackEpoch = runtime.epoch
     runtime.attemptAbort?.abort()
     runtime.attemptAbort = undefined
     runtime.manualDisconnect = true
@@ -2046,16 +2069,39 @@ export class DeviceMeshBroker {
     }
     this.changed()
     if (rollback !== undefined) {
-      try {
-        if (rollback.previous === undefined) await this.store.removePeer('daemons', peer.deviceId)
-        else await this.store.upsertPeer('daemons', rollback.previous)
-      } catch (error) {
-        this.logger.warn(`device-mesh: could not roll back failed pairing: ${errorMessage(error)}`)
-      }
+      await this.rollbackFailedDaemonPeer(runtime, peer.deviceId, rollbackEpoch, rollback)
     }
     // No secret material: only the fixed reason code goes to the audit trail.
     await this.store.appendAudit({ action: 'session.closed', peer: peer.deviceId, detail: auditDetail })
     this.changed()
+  }
+
+  /**
+   * Persist the rollback of a failed first-contact daemon record under
+   * {@link exclusivePairing}, skipping the store mutation if a newer pairing
+   * or connection attempt has already taken ownership of `deviceId`.
+   */
+  private async rollbackFailedDaemonPeer(
+    runtime: DaemonRuntime,
+    deviceId: string,
+    rollbackEpoch: number,
+    rollback: { readonly previous: PeerRecord | undefined },
+  ): Promise<void> {
+    await this.exclusivePairing(async () => {
+      const current = this.daemons.get(deviceId)
+      if (current !== undefined && (current !== runtime || current.epoch !== rollbackEpoch)) {
+        return
+      }
+      // Never resurrect a peer that was concurrently forgotten or revoked.
+      const live = this.store.findPeer('daemons', deviceId)
+      if (live === undefined || live.revokedAt !== null) return
+      try {
+        if (rollback.previous === undefined) await this.store.removePeer('daemons', deviceId)
+        else await this.store.upsertPeer('daemons', rollback.previous)
+      } catch (error) {
+        this.logger.warn(`device-mesh: could not roll back failed pairing: ${errorMessage(error)}`)
+      }
+    })
   }
 
   private runtimeFor(deviceId: string): DaemonRuntime {
