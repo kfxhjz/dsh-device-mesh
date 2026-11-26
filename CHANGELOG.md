@@ -9,6 +9,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 0.1.9 - 2026-11-25
+
+### Fixed
+
+- A remote portal logs in to its local DSH Web server again on every Host in the
+  supported range. DSH 0.2.2-rc.2 moved the browser launch token out of
+  `connection.authenticatedUrl` into the token-authentication plugin, so
+  `portal.prepare` failed with "DSH connection.authenticatedUrl is unavailable".
+  The daemon now collects DSH's synchronous `webserver/entry-url` advertisement
+  with the WebServer as `this`, keeps the entry whose origin, mount and single
+  `token` parameter match the local origin, and falls back to the legacy service
+  method only on Hosts that still provide it. When neither answers, the error
+  names the collection instead of a removed method.
+
+- Inbound connections that never complete the Noise handshake now reserve their
+  session slot before authentication, the direct listener caps raw pre-upgrade
+  sockets and the relay tracks at most 64 data sockets, so a burst cannot
+  exhaust file descriptors or CPU. Handshake key material and transport ciphers
+  are cleared on every failure path, and frames that arrive while app-auth is
+  still running are queued and delivered once the session is live.
+
+- Portal proxy requests with malformed targets, protocol-relative paths,
+  invalid header names or values, or mismatched stream ids are rejected (400 or
+  fail closed) instead of being forwarded or turned into open redirects; cached
+  asset headers are validated before use. Streamed responses and WebSocket
+  dials now follow request aborts end to end, HEAD responses are no longer
+  gzipped, and a portal that closes mid-upgrade answers 503 instead of leaving
+  the request hanging.
+
+- A first-contact pairing that fails on every endpoint now rolls its pinned peer
+  record back instead of leaving a phantom "connecting" device, and a late
+  rollback can no longer resurrect a peer that was revoked or forgotten. Pairing
+  calls, portal opens, revoke/forget and direct/relay reconfiguration are
+  serialized; revoking or forgetting closes the affected sessions and portal;
+  heartbeat `lastSeenAt` writes are batched to once every five minutes, and
+  relay connectivity reflects the live control socket.
+
+- Two hosts starting against the same empty state directory can no longer
+  generate competing identities: startup loads state while holding the
+  cross-process lock, stale locks are broken only after the owner PID is
+  confirmed dead, and non-ENOENT read errors fail closed instead of wiping
+  peers. Identity private-key DER is zeroized and control characters are
+  rejected in device names.
+
+- `info` reports the real plugin version (previously 0.0.1), now taken from
+  `package.json` at build time.
+
+- The remote pane and deep-link helpers release their DOM listeners, observers
+  and timers when the plugin is disposed, validate `postMessage` origins, and
+  strip embed-only parameters from external opens. The Devices panel coalesces
+  post-mutation polls, reflects portal open/close immediately, tracks concurrent
+  actions per device, reuses unexpired pairing tickets, and uses an accessible
+  confirmation dialog; a rolled-back first contact now surfaces as a pairing
+  failure instead of a silent wait.
+
+### Changed
+
+- The client bundle is typechecked separately against the DOM library, and the
+  shared base64 helpers no longer require Node's `Buffer` type.
+
 ## 0.1.8 - 2026-11-23
 
 ### Fixed

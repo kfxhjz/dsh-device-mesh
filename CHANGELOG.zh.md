@@ -9,6 +9,51 @@
 
 ## Unreleased
 
+## 0.1.9 - 2026-11-25
+
+### 修复（Fixed）
+
+- 在支持范围内的任何 Host 上，远程 portal 重新能登录本机 DSH Web 服务。DSH
+  0.2.2-rc.2 把浏览器 launch token 从 `connection.authenticatedUrl` 移到了 token
+  认证插件，于是 `portal.prepare` 报 “DSH connection.authenticatedUrl is
+  unavailable”。daemon 现在以 WebServer 为 `this` 采集 DSH 同步的
+  `webserver/entry-url` 公告，取与本地 origin、挂载路径和唯一 `token` 参数都匹配
+  的条目；只有在仍提供旧服务方法的 Host 上才回退。两者都不可用时，错误信息指向该
+  采集事件，而不是已移除的方法。
+
+- 未完成 Noise 握手的入站连接现在会在认证前预占会话名额；direct 监听器限制未升级的
+  原始 TCP 连接数，relay 同时最多跟踪 64 条数据 socket，突发连接不再能耗尽文件描述符
+  或 CPU。所有失败路径都会清零握手密钥与传输 cipher，app-auth 期间到达的封包会先排队，
+  会话建立后再投递。
+
+- portal 代理会拒绝畸形目标、以 `//` 开头的协议相对路径、非法头部名/值，以及 stream
+  id 不匹配的请求（返回 400 或失败关闭），不再把它们转发出去或变成开放重定向；缓存的
+  资源头部在使用前会校验。流式响应与 WebSocket 拨号现在全程跟随请求中止，HEAD 响应
+  不再 gzip，portal 在升级过程中关闭时返回 503，而不是让请求一直挂着。
+
+- 首次配对在所有端点都失败时，会回滚临时固定的 peer 记录，不再留下一个假的
+  “connecting” 设备；迟到的回滚也不会复活已撤销或已遗忘的设备。配对调用、portal
+  打开、撤销/遗忘以及 direct/relay 重配现在串行执行；撤销或遗忘会关闭对应会话与
+  portal；心跳 `lastSeenAt` 最多每五分钟写一次磁盘，relay 连接状态取自实时控制
+  socket。
+
+- 两个 Host 同时从同一个空状态目录启动时不再会各自生成身份：启动过程在跨进程锁内
+  加载状态，陈旧锁只有在确认持有者 PID 已退出后才会被清理，非 ENOENT 的读错误会
+  失败关闭而不是把 peers 清空。身份私钥的 DER 会清零，设备名中的控制字符会被拒绝。
+
+- `info` 现在报告真实的插件版本（此前固定为 0.0.1），版本在构建时取自
+  `package.json`。
+
+- 远程面板与深链辅助函数在插件销毁时会释放 DOM 监听器、observer 与定时器，校验
+  `postMessage` 的来源，并在外部打开时去掉仅用于嵌入的参数。设备面板会合并变更后的
+  轮询、立即反映 portal 开关、按设备跟踪并发操作、复用未过期的配对票据，并使用可访问
+  的确认对话框；首次配对回滚现在会显示配对失败，而不是一直等待。
+
+### 变更（Changed）
+
+- client bundle 现在单独按 DOM 库做类型检查，共享的 base64 辅助函数不再依赖 Node 的
+  `Buffer` 类型。
+
 ## 0.1.8 - 2026-11-23
 
 ### 修复（Fixed）
