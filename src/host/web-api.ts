@@ -377,13 +377,14 @@ export interface WebApi {
 export function createWebApi(options: WebApiOptions): WebApi {
   const logger = options.logger ?? silentLogger
   const renderQr = options.renderQr
+  const dispatchOptions = {
+    ...(renderQr !== undefined ? { renderQr } : {}),
+    ...(options.openExternal !== undefined ? { openExternal: options.openExternal } : {}),
+  }
   return {
     path: LOCAL_API_PATH,
     async dispatch(envelope: unknown): Promise<LocalApiResult<unknown>> {
-      return dispatchLocalApi(options.broker, envelope, {
-        ...(renderQr !== undefined ? { renderQr } : {}),
-        ...(options.openExternal !== undefined ? { openExternal: options.openExternal } : {}),
-      })
+      return dispatchLocalApi(options.broker, envelope, dispatchOptions)
     },
     async handle(request: Request): Promise<Response> {
       if (request.method !== 'POST') {
@@ -414,11 +415,7 @@ export function createWebApi(options: WebApiOptions): WebApi {
       } catch {
         return jsonResponse(fail('mesh/bad-request', 'request body is not JSON'))
       }
-      const result = await dispatchLocalApi(
-        options.broker,
-        envelope,
-        renderQr !== undefined ? { renderQr } : {},
-      )
+      const result = await dispatchLocalApi(options.broker, envelope, dispatchOptions)
       if (!result.ok) logger.debug(`device-mesh: local API ${String((envelope as { endpoint?: unknown }).endpoint)} failed: ${result.error.code}`)
       return jsonResponse(result)
     },

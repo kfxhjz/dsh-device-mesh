@@ -491,6 +491,32 @@ describe('web-api: HTTP handler', () => {
     assert.equal(body.error.code, 'mesh/bad-request')
   })
 
+  it('forwards openExternal through handle() for portal.external', async () => {
+    const portalUrl = 'http://127.0.0.1:5555/?token=abc'
+    const broker = new FakeBroker()
+    ;(broker as unknown as { state: () => MeshHostState }).state = () => ({
+      ...STATE,
+      portals: [{ deviceId: DEVICE.deviceId, url: portalUrl }],
+    })
+    const opened: string[] = []
+    const httpApi = createWebApi({
+      broker,
+      openExternal: async (url) => {
+        opened.push(url)
+        return true
+      },
+    })
+    const response = await httpApi.handle(new Request('http://127.0.0.1/api/device-mesh', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint: 'portal.external', payload: { url: portalUrl } }),
+    }))
+    assert.equal(response.status, 200)
+    const body = await response.json() as { ok: boolean; value?: { opened: boolean } }
+    assert.deepEqual(body, { ok: true, value: { opened: true } })
+    assert.deepEqual(opened, [portalUrl])
+  })
+
   it('exposes the DSH route path', () => {
     assert.equal(api.path, '/api/device-mesh')
     assert.equal(api.dispatch, api.dispatch)

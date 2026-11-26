@@ -341,15 +341,28 @@ async function resolveExternalOpener(): Promise<((url: string) => Promise<boolea
       const [command, args] = process.platform === 'darwin'
         ? ['open', [url]]
         : process.platform === 'win32'
-          ? ['cmd', ['/c', 'start', '', url]]
+          ? ['rundll32.exe', ['url.dll,FileProtocolHandler', url]]
           : ['xdg-open', [url]]
-      try {
-        const child = spawn(command, args, { detached: true, stdio: 'ignore' })
-        child.unref()
-        return true
-      } catch {
-        return false
-      }
+      return await new Promise<boolean>((resolve) => {
+        let settled = false
+        const finish = (opened: boolean): void => {
+          if (settled) return
+          settled = true
+          resolve(opened)
+        }
+        try {
+          const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+          child.on('error', () => {
+            finish(false)
+          })
+          child.once('spawn', () => {
+            child.unref()
+            finish(true)
+          })
+        } catch {
+          finish(false)
+        }
+      })
     }
   } catch {
     return undefined

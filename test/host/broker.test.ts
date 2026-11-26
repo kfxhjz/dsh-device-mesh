@@ -1340,6 +1340,288 @@ describe('broker: revoke/forget cancel pending pairing (M8)', () => {
   })
 })
 
+describe('broker: reconnect, concurrency and rollback regressions', () => {
+  it('updates relay.connected back to true when the relay reconnects', async () => {
+    const temp = await makeTempDir()
+    const store = await MeshStore.open({ home: temp.dir })
+    const pairing = new PairingService({ identity: store.getIdentity(), store })
+    await pairing.init()
+    let connectedFlag = true
+    const connectListeners: Array<() => void> = []
+    const disconnectListeners: Array<(info: { local?: boolean }) => void> = []
+    const broker = new DeviceMeshBroker({
+      store,
+      pairing,
+      workspaces: new WorkspaceProvider({ getService: () => undefined }),
+      portalDaemon: new PortalDaemon({ origin: 'http://127.0.0.1:1', getService: () => undefined }),
+      factories: {
+        startRelayDaemon: async (): Promise<RelayDaemon> => ({
+          ready: Promise.resolve(),
+          onClient: () => () => {},
+          onConnect: (listener) => {
+            connectListeners.push(listener)
+            return () => {}
+          },
+          onDisconnect: (listener) => {
+            disconnectListeners.push(listener)
+            return () => {}
+          },
+          get connected() {
+            return connectedFlag
+          },
+          close: async () => { connectedFlag = false },
+        }),
+      },
+    })
+    await broker.start()
+    try {
+      await broker.configureRelay({ endpoint: 'wss://relay.example.com/ws', enabled: true })
+      await flush()
+      assert.equal(broker.state().relay.connected, true)
+      connectedFlag = false
+      for (const listener of disconnectListeners) listener({ local: false })
+      assert.equal(broker.state().relay.connected, false)
+      connectedFlag = true
+      for (const listener of connectListeners) listener()
+      assert.equal(broker.state().relay.connected, true)
+      assert.equal((broker.diagnostics().relay as { connected: boolean }).connected, true)
+    } finally {
+      await broker.stop()
+      await temp.cleanup()
+    }
+  })
+
+  it('single-flights concurrent openPortal and closes the portal if revoked mid-open', async () => {
+    const temp = await makeTempDir()
+    const store = await MeshStore.open({ home: temp.dir })
+    const pairing = new PairingService({ identity: store.getIdentity(), store })
+    await pairing.init()
+    let openCalls = 0
+    let closeCalls = 0
+    const gate = deferred()
+    const broker = new DeviceMeshBroker({
+      store,
+      pairing,
+      workspaces: new WorkspaceProvider({ getService: () => undefined }),
+      portalDaemon: new PortalDaemon({ origin: 'http://127.0.0.1:1', getService: () => undefined }),
+      factories: {
+        connectDirect: async () => new FakeTransport('direct'),
+      },
+      connector: {
+        connect: async () => ({
+          session: new FakeMeshSession({}, method => (method === 'info' ? { protocol: 1 } : {})),
+        }),
+      },
+      portal: {
+        open: async (portalOptions) => {
+          openCalls += 1
+          await gate.promise
+          const controller = fakePortalController(portalOptions.deviceId) as unknown as PortalController
+          const origClose = controller.close.bind(controller)
+          controller.close = async () => {
+            closeCalls += 1
+            await origClose()
+          }
+          return controller
+        },
+      },
+    })
+    await broker.start()
+    try {
+      const daemonIdentity = generateDeviceIdentity({ name: 'PortalPeer' })
+      await store.upsertPeer('daemons', daemonRecord(daemonIdentity, [{ k: 'direct', url: 'ws://192.0.2.9:45871/mesh' }]))
+      await broker.connectDevice(daemonIdentity.deviceId)
+
+      const first = broker.openPortal(daemonIdentity.deviceId)
+      const second = broker.openPortal(daemonIdentity.deviceId)
+      await waitFor(() => openCalls === 1)
+      await broker.revokePeer(daemonIdentity.deviceId)
+      gate.resolve()
+      await assert.rejects(first, (error: unknown) => (error as { code?: string }).code === 'mesh/revoked')
+      await assert.rejects(second, (error: unknown) => (error as { code?: string }).code === 'mesh/revoked')
+      assert.equal(openCalls, 1, 'concurrent openPortal calls must share one in-flight open')
+      assert.equal(closeCalls, 1, 'portal opened after revocation must be closed immediately')
+      assert.equal(broker.state().portals.length, 0)
+    } finally {
+      await broker.stop()
+      await temp.cleanup()
+    }
+  })
+
+  it('bounds pre-auth inbound handshakes via tryReserveInbound', async () => {
+    const fixture = await makeBroker()
+    try {
+      const releases: Array<() => void> = []
+      for (let i = 0; i < MAX_INBOUND_SESSIONS; i += 1) {
+        const release = fixture.broker.tryReserveInbound()
+        assert.ok(release, `reservation ${i} should succeed`)
+        releases.push(release)
+      }
+      assert.equal(fixture.broker.canAcceptInbound(), false)
+      assert.equal(fixture.broker.tryReserveInbound(), undefined)
+      releases.pop()?.()
+      assert.equal(fixture.broker.canAcceptInbound(), true)
+      for (const release of releases) release()
+    } finally {
+      await fixture.cleanup()
+    }
+  })
+
+  it('rolls back a newly pinned daemon when first-contact pairing fails on all endpoints', async () => {
+    const temp = await makeTempDir()
+    const store = await MeshStore.open({ home: temp.dir })
+    const pairing = new PairingService({ identity: store.getIdentity(), store })
+    await pairing.init()
+    const broker = new DeviceMeshBroker({
+      store,
+      pairing,
+      workspaces: new WorkspaceProvider({ getService: () => undefined }),
+      portalDaemon: new PortalDaemon({ origin: 'http://127.0.0.1:1', getService: () => undefined }),
+      factories: {
+        connectDirect: async () => {
+          throw new Error('ECONNREFUSED')
+        },
+      },
+      connector: {
+        connect: async () => ({ session: new FakeMeshSession() }),
+      },
+    })
+    await broker.start()
+    try {
+      const daemonSide = generateDeviceIdentity({ name: 'Unreachable' })
+      const ticket = createPairingTicket({
+        identity: daemonSide,
+        endpoints: [{ k: 'direct', url: 'ws://192.0.2.99:45871/mesh' }],
+        token: Buffer.alloc(32, 11).toString('base64url'),
+        now: Date.now(),
+      })
+      await broker.pairWithLink(ticket.link)
+      await waitFor(() => store.findPeer('daemons', daemonSide.deviceId) === undefined)
+      assert.equal(
+        broker.state().devices.some(device => device.deviceId === daemonSide.deviceId),
+        false,
+        'unreachable first-contact daemon must not stay persisted in peers.json',
+      )
+    } finally {
+      await broker.stop()
+      await temp.cleanup()
+    }
+  })
+
+  it('does not let a superseded first-contact failure roll back a newer pairWithLink', async () => {
+    const temp = await makeTempDir()
+    const store = await MeshStore.open({ home: temp.dir })
+    const pairing = new PairingService({ identity: store.getIdentity(), store })
+    await pairing.init()
+    let failFirst!: (error: Error) => void
+    let dialCalls = 0
+    const liveSession = new FakeMeshSession()
+    const broker = new DeviceMeshBroker({
+      store,
+      pairing,
+      workspaces: new WorkspaceProvider({ getService: () => undefined }),
+      portalDaemon: new PortalDaemon({ origin: 'http://127.0.0.1:1', getService: () => undefined }),
+      factories: {
+        connectDirect: async () => {
+          dialCalls += 1
+          if (dialCalls === 1) {
+            return await new Promise<FakeTransport>((_resolve, reject) => {
+              failFirst = reject
+            })
+          }
+          return new FakeTransport('direct')
+        },
+      },
+      connector: {
+        connect: async () => ({ session: liveSession }),
+      },
+    })
+    await broker.start()
+    try {
+      const daemonSide = generateDeviceIdentity({ name: 'Retried' })
+      const ticket1 = createPairingTicket({
+        identity: daemonSide,
+        endpoints: [{ k: 'direct', url: 'ws://192.0.2.10:45871/mesh' }],
+        token: Buffer.alloc(32, 12).toString('base64url'),
+        now: Date.now(),
+      })
+      const ticket2 = createPairingTicket({
+        identity: daemonSide,
+        endpoints: [{ k: 'direct', url: 'ws://192.0.2.11:45871/mesh' }],
+        token: Buffer.alloc(32, 13).toString('base64url'),
+        now: Date.now(),
+      })
+      await broker.pairWithLink(ticket1.link)
+      await waitFor(() => dialCalls === 1)
+      await broker.pairWithLink(ticket2.link)
+      failFirst(new Error('ECONNREFUSED'))
+      await waitFor(() => broker.state().devices.find(device => device.deviceId === daemonSide.deviceId)?.status === 'online')
+      assert.ok(store.findPeer('daemons', daemonSide.deviceId), 'newer pairing must survive superseded rollback')
+    } finally {
+      liveSession.close()
+      await broker.stop()
+      await temp.cleanup()
+    }
+  })
+
+  it('does not let a failed re-pairing rollback resurrect a revoked or forgotten daemon', async () => {
+    const temp = await makeTempDir()
+    const store = await MeshStore.open({ home: temp.dir })
+    const pairing = new PairingService({ identity: store.getIdentity(), store })
+    await pairing.init()
+    const daemonSide = generateDeviceIdentity({ name: 'Existing' })
+    await store.upsertPeer('daemons', {
+      deviceId: daemonSide.deviceId,
+      name: daemonSide.name,
+      platform: daemonSide.platform,
+      signPk: daemonSide.signPk,
+      dhPk: daemonSide.dhPk,
+      scope: { kind: 'control', workspaces: 'all', expiresAt: null },
+      pairedAt: '2026-01-01T00:00:00.000Z',
+      lastSeenAt: '2026-01-01T00:00:00.000Z',
+      revokedAt: null,
+      endpoints: [{ k: 'direct', url: 'ws://192.0.2.1:45871/mesh' }],
+    })
+    let failDial!: (error: Error) => void
+    const broker = new DeviceMeshBroker({
+      store,
+      pairing,
+      workspaces: new WorkspaceProvider({ getService: () => undefined }),
+      portalDaemon: new PortalDaemon({ origin: 'http://127.0.0.1:1', getService: () => undefined }),
+      factories: {
+        connectDirect: async () => await new Promise<FakeTransport>((_resolve, reject) => {
+          failDial = reject
+        }),
+      },
+      connector: {
+        connect: async () => ({ session: new FakeMeshSession() }),
+      },
+    })
+    await broker.start()
+    try {
+      const ticket = createPairingTicket({
+        identity: daemonSide,
+        endpoints: [{ k: 'direct', url: 'ws://192.0.2.2:45871/mesh' }],
+        token: Buffer.alloc(32, 14).toString('base64url'),
+        now: Date.now(),
+      })
+      await broker.pairWithLink(ticket.link)
+      await waitFor(() => typeof failDial === 'function')
+      await broker.revokePeer(daemonSide.deviceId)
+      failDial(new Error('ECONNREFUSED'))
+      await flush(10)
+      assert.notEqual(
+        store.findPeer('daemons', daemonSide.deviceId)?.revokedAt,
+        null,
+        'revoked daemon must remain revoked after failed re-pairing rollback',
+      )
+    } finally {
+      await broker.stop()
+      await temp.cleanup()
+    }
+  })
+})
+
 /** Invoke the broker's private 30 s sweep directly (timers are not faked here). */
 function prune(broker: DeviceMeshBroker): void {
   ;(broker as unknown as { pruneInboundSessions(): void }).pruneInboundSessions()

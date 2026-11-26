@@ -171,12 +171,19 @@ interface DaemonRuntime {
   pairingSession: MeshSession | undefined
   /** Consecutive heartbeat misses; a lone miss is tolerated (relay jitter). */
   heartbeatFailures: number
+  /** Latest liveness timestamp kept in memory so heartbeats do not rewrite peers.json every 30s. */
+  lastSeenAt: string | undefined
+  /** Wall-clock ms of the last persisted `lastSeenAt` write for this daemon. */
+  lastSeenPersistedAt: number
 }
 
 interface PortalRecord {
   readonly controller: PortalController
   readonly deviceId: string
 }
+
+/** Minimum interval between persisting heartbeat `lastSeenAt` updates to `peers.json`. */
+const LAST_SEEN_PERSIST_INTERVAL_MS = 5 * 60 * 1000
 
 /** Result of opening the local pairing view. */
 export interface CreatedPairingTicket {
@@ -264,6 +271,10 @@ export class DeviceMeshBroker {
    * await could interleave with a deny/revoke and resurrect a peer.
    */
   private pairingChain: Promise<unknown> = Promise.resolve()
+  /** Serializes direct listener reconfiguration so concurrent updates never leak listeners. */
+  private directConfigChain: Promise<unknown> = Promise.resolve()
+  /** Serializes relay reconfiguration so concurrent updates never leak relay daemons. */
+  private relayConfigChain: Promise<unknown> = Promise.resolve()
 
   private directListener: DirectListener | undefined
   private relayDaemon: RelayDaemon | undefined
@@ -411,6 +422,11 @@ export class DeviceMeshBroker {
       } else {
         this.logger.warn(`device-mesh: direct listener unavailable: ${errorMessage(error)}`)
       }
+    }
+    if (!this.started && this.directListener !== undefined) {
+      const stale = this.directListener
+      this.directListener = undefined
+      await stale.close().catch(() => {})
     }
     this.listenPort = this.directListener?.port ?? 0
   }
@@ -1309,8 +1325,11 @@ export class DeviceMeshBroker {
           session.close()
           throw new MeshRpcError('mesh/internal', 'connection attempt was cancelled')
         }
+        const nowStamp = nowIso(this.now)
+        runtime.lastSeenAt = nowStamp
+        runtime.lastSeenPersistedAt = this.now()
         const patch: { lastSeenAt: string; endpoints: readonly PairingEndpoint[] } = {
-          lastSeenAt: nowIso(this.now),
+          lastSeenAt: nowStamp,
           endpoints: [endpoint, ...endpoints.filter(item => item !== endpoint)],
         }
         void this.store.patchPeer('daemons', peer.deviceId, patch).catch(() => {})
@@ -1558,7 +1577,13 @@ export class DeviceMeshBroker {
       try {
         await session.ping(5_000)
         runtime.heartbeatFailures = 0
-        void this.store.patchPeer('daemons', deviceId, { lastSeenAt: nowIso(this.now) }).catch(() => {})
+        const nowMs = this.now()
+        const iso = new Date(nowMs).toISOString()
+        runtime.lastSeenAt = iso
+        if (nowMs - runtime.lastSeenPersistedAt >= LAST_SEEN_PERSIST_INTERVAL_MS) {
+          runtime.lastSeenPersistedAt = nowMs
+          void this.store.patchPeer('daemons', deviceId, { lastSeenAt: iso }).catch(() => {})
+        }
       } catch {
         runtime.heartbeatFailures += 1
         // Do not close on an application-ping miss: the transport close event is
@@ -1647,6 +1672,16 @@ export class DeviceMeshBroker {
 
   /** Open the loopback portal for one connected daemon. */
   async openPortal(deviceId: string): Promise<{ readonly url: string }> {
+    const inFlight = this.openingPortals.get(deviceId)
+    if (inFlight !== undefined) return inFlight
+    const task = this.doOpenPortal(deviceId).finally(() => {
+      if (this.openingPortals.get(deviceId) === task) this.openingPortals.delete(deviceId)
+    })
+    this.openingPortals.set(deviceId, task)
+    return task
+  }
+
+  private async doOpenPortal(deviceId: string): Promise<{ readonly url: string }> {
     const peer = this.requireDaemon(deviceId)
     if (peer.revokedAt !== null) throw new MeshRpcError('mesh/revoked', 'device has been revoked')
     const runtime = this.runtimeFor(deviceId)
@@ -1678,15 +1713,37 @@ export class DeviceMeshBroker {
     } finally {
       clearTimeout(warmTimer)
     }
+    const checkStillAllowed = (): void => {
+      if (!this.started) throw new MeshRpcError('mesh/internal', 'broker is stopped')
+      const livePeer = this.store.findPeer('daemons', deviceId)
+      if (livePeer === undefined) throw new MeshRpcError('mesh/not-found', 'device is no longer paired')
+      if (livePeer.revokedAt !== null) throw new MeshRpcError('mesh/revoked', 'device has been revoked')
+    }
+    checkStillAllowed()
+    const opened: { current: PortalController | undefined } = { current: undefined }
     const controller = await this.portal.open({
       session,
       deviceId,
       onClose: () => {
-        this.portals.delete(deviceId)
+        if (opened.current !== undefined && this.portals.get(deviceId)?.controller === opened.current) {
+          this.portals.delete(deviceId)
+        }
         void this.store.appendAudit({ action: 'portal.closed', peer: deviceId })
         this.changed()
       },
     })
+    opened.current = controller
+    try {
+      checkStillAllowed()
+    } catch (error) {
+      await controller.close().catch(() => {})
+      throw error
+    }
+    const previous = this.portals.get(deviceId)
+    if (previous !== undefined && previous.controller !== controller) {
+      this.portals.delete(deviceId)
+      await previous.controller.close().catch(() => {})
+    }
     this.portals.set(deviceId, { controller, deviceId })
     await this.store.appendAudit({ action: 'portal.opened', peer: deviceId })
     this.changed()
@@ -1722,22 +1779,26 @@ export class DeviceMeshBroker {
       const daemons = this.store.findPeer('daemons', deviceId)
       if (controllers !== undefined) await this.store.revokePeer('controllers', deviceId)
       if (daemons !== undefined) await this.store.revokePeer('daemons', deviceId)
+      const runtime = this.daemons.get(deviceId)
+      if (runtime !== undefined) {
+        runtime.manualDisconnect = true
+        // Abort a dial/handshake still in flight under the lock so no queued
+        // pairing rollback or late handshake can supersede revocation (H5).
+        this.cancelAttempt(runtime)
+        if (runtime.reconnectTimer !== undefined) clearTimeout(runtime.reconnectTimer)
+        runtime.reconnectTimer = undefined
+        runtime.session?.close()
+        runtime.session = undefined
+        runtime.connecting = undefined
+        runtime.status = 'revoked'
+        runtime.detail = undefined
+      }
       return { controllers, daemons }
     })
-    const runtime = this.daemons.get(deviceId)
-    if (runtime !== undefined) {
-      runtime.manualDisconnect = true
-      // Abort a dial/handshake still in flight so it cannot complete after the
-      // revocation and adopt a session (H5).
-      this.cancelAttempt(runtime)
-      if (runtime.reconnectTimer !== undefined) clearTimeout(runtime.reconnectTimer)
-      runtime.reconnectTimer = undefined
-      runtime.session?.close()
-      runtime.session = undefined
-      runtime.connecting = undefined
-      runtime.status = 'revoked'
-      runtime.detail = undefined
-    }
+    // Close again after persisting revocation so a session that finished
+    // authenticating while the store write was awaiting cannot survive.
+    this.closeInboundSessions(deviceId)
+    await this.closePortal(deviceId)
     if (records.controllers === undefined && records.daemons === undefined) {
       throw new MeshRpcError('mesh/not-found', 'unknown peer')
     }
@@ -1776,6 +1837,8 @@ export class DeviceMeshBroker {
       const removedB = await this.store.removePeer('daemons', deviceId)
       return removedA || removedB
     })
+    this.closeInboundSessions(deviceId)
+    await this.closePortal(deviceId)
     if (removed) this.changed()
     return { forgot: removed }
   }
@@ -1801,14 +1864,20 @@ export class DeviceMeshBroker {
 
   /** Update the direct listener settings and restart it when needed. */
   async configureDirect(patch: { readonly enabled?: boolean; readonly port?: number }): Promise<MeshHostState['direct']> {
-    const settings = await this.store.updateSettings({ direct: patch })
-    const direct = this.directListener
-    this.directListener = undefined
-    if (direct !== undefined) await direct.close().catch(() => {})
-    this.listenPort = 0
-    if (settings.direct.enabled && this.started) await this.startDirect()
-    this.changed()
-    return this.state().direct
+    const run = this.directConfigChain.then(async () => {
+      const settings = await this.store.updateSettings({ direct: patch })
+      const direct = this.directListener
+      this.directListener = undefined
+      if (direct !== undefined) await direct.close().catch(() => {})
+      this.listenPort = 0
+      if (settings.direct.enabled && this.started) {
+        await this.startDirect()
+      }
+      this.changed()
+      return this.state().direct
+    })
+    this.directConfigChain = run.then(() => undefined, () => undefined)
+    return run
   }
 
   /** Update relay settings and restart the relay daemon when needed. */
@@ -1817,17 +1886,21 @@ export class DeviceMeshBroker {
     readonly enabled?: boolean
     readonly useTls?: boolean
   }): Promise<MeshHostState['relay']> {
-    const settings = await this.store.updateSettings({ relay: patch })
-    const relay = this.relayDaemon
-    this.relayDaemon = undefined
-    this.relayConnected = false
-    if (relay !== undefined) await relay.close().catch(() => {})
-    if (settings.relay.enabled && settings.relay.endpoint !== null && this.started) {
-      await this.store.ensureRelayServerId()
-      await this.startRelay()
-    }
-    this.changed()
-    return this.state().relay
+    const run = this.relayConfigChain.then(async () => {
+      const settings = await this.store.updateSettings({ relay: patch })
+      const relay = this.relayDaemon
+      this.relayDaemon = undefined
+      this.relayConnected = false
+      if (relay !== undefined) await relay.close().catch(() => {})
+      if (settings.relay.enabled && settings.relay.endpoint !== null && this.started) {
+        await this.store.ensureRelayServerId()
+        await this.startRelay()
+      }
+      this.changed()
+      return this.state().relay
+    })
+    this.relayConfigChain = run.then(() => undefined, () => undefined)
+    return run
   }
 
   // -------------------------------------------------------------------------
@@ -2123,6 +2196,8 @@ export class DeviceMeshBroker {
       pairingRollback: undefined,
       pairingSession: undefined,
       heartbeatFailures: 0,
+      lastSeenAt: undefined,
+      lastSeenPersistedAt: 0,
     }
     this.daemons.set(deviceId, created)
     return created
@@ -2170,7 +2245,7 @@ export class DeviceMeshBroker {
       controllable: true,
       controlsMe: false,
       pairedAt: peer.pairedAt,
-      lastSeenAt: peer.lastSeenAt,
+      lastSeenAt: runtime?.lastSeenAt ?? peer.lastSeenAt,
       revoked: peer.revokedAt !== null,
       scope: peer.scope,
       status,
